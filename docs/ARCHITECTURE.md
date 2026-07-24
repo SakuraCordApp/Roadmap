@@ -19,9 +19,11 @@ use and contains no mutation credentials.
 
 The separate
 [`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot)
-repository owns the persistent Gateway transport. It only normalizes documented
-Gateway dispatches and sends HMAC-authenticated events to this Worker, so both
-repositories build and deploy without a local sibling checkout.
+repository owns Discord synchronization transport. Its free-tier Cloudflare
+provider schedules authenticated reconciliation; its optional Node provider
+normalizes documented Gateway dispatches and sends HMAC-authenticated events to
+this Worker. Both repositories build and deploy without a local sibling
+checkout.
 
 `packages/mcp` exposes the roadmap API through MCP. Local repository inspection
 is explicitly read-only and is absent from remote Worker mode.

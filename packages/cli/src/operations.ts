@@ -160,7 +160,7 @@ export async function deploy(
     output(context, {
       plan: [
         "run complete local checks",
-        "deploy Worker/assets/Durable Object",
+        "deploy Worker/assets",
         "verify health endpoint and schema version",
       ],
     });

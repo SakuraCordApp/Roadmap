@@ -36,8 +36,9 @@ single-use.
 - Interaction IDs are replay-protected in D1.
 - GitHub webhook bodies use `X-Hub-Signature-256` HMAC verification and
   delivery IDs are replay-protected for 30 days.
-- DiscordBot ingress uses HMAC-SHA256 over timestamp, nonce, and raw body.
-- Gateway timestamps and nonces are replay-protected.
+- The optional real-time DiscordBot Node provider uses HMAC-SHA256 over
+  timestamp, nonce, and raw body.
+- Node Gateway timestamps and nonces are replay-protected.
 - Mutation requests require durable idempotency keys.
 - Public and mutation rate windows are D1-backed.
 - CORS uses an exact configured allowlist and never enables credentials.

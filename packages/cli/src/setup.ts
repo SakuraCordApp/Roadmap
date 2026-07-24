@@ -804,7 +804,10 @@ async function gatherAnswers(
       message: "Discord Gateway provider",
       choices: [
         { title: "Self-hosted Node worker (portable default)", value: "node" },
-        { title: "Cloudflare Durable Object", value: "cloudflare" },
+        {
+          title: "Cloudflare scheduled reconciliation",
+          value: "cloudflare",
+        },
         { title: "Disabled", value: "disabled" },
       ],
       initial:
@@ -1368,7 +1371,9 @@ export async function finishDiscordRuntime(
       context,
       "discord_gateway",
       "complete",
-      `Cloudflare Gateway connected with session ${status.sessionId}`,
+      status.sessionId
+        ? `Cloudflare Gateway connected with session ${status.sessionId}`
+        : `Cloudflare Discord synchronization healthy through ${status.provider}`,
     );
   } else if (answers.gatewayProvider === "node") {
     output(
@@ -1378,19 +1383,32 @@ export async function finishDiscordRuntime(
   }
 }
 
-async function waitForCloudflareGateway(
-  api: CliApiClient,
-): Promise<{ connected: true; sessionId: string }> {
+async function waitForCloudflareGateway(api: CliApiClient): Promise<{
+  connected: boolean;
+  sessionId?: string;
+  healthy: boolean;
+  provider: string;
+}> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const response = await api.post("/api/v1/discord/gateway/status");
     if (response.data?.connected && response.data?.sessionId) {
-      return { connected: true, sessionId: String(response.data.sessionId) };
+      return {
+        connected: true,
+        sessionId: String(response.data.sessionId),
+        healthy: true,
+        provider: String(response.data.provider ?? "cloudflare-gateway"),
+      };
+    }
+    if (response.data?.healthy && response.data?.provider) {
+      return {
+        connected: false,
+        healthy: true,
+        provider: String(response.data.provider),
+      };
     }
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
-  throw new Error(
-    "Cloudflare Gateway was started but did not reach a connected Discord session within 20 seconds.",
-  );
+  throw new Error("Cloudflare Discord synchronization did not become healthy within 20 seconds.");
 }
 
 async function putSecret(context: CliContext, name: string, value: string): Promise<void> {

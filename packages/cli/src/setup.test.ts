@@ -28,7 +28,7 @@ afterEach(async () => {
 });
 
 describe("one-shot Discord runtime completion", () => {
-  it("publishes, reconciles, starts Cloudflare Gateway, and verifies a connected session", async () => {
+  it("publishes, reconciles, starts Cloudflare synchronization, and verifies health", async () => {
     const requests: Array<{
       path: string;
       authorization: string | null;
@@ -71,8 +71,12 @@ describe("one-shot Discord runtime completion", () => {
         return Response.json({
           data:
             statusChecks === 1
-              ? { connected: false, sessionId: null }
-              : { connected: true, sessionId: "gateway-session" },
+              ? { connected: false, healthy: false }
+              : {
+                  connected: false,
+                  healthy: true,
+                  provider: "cloudflare-scheduled-reconciliation",
+                },
         });
       }
       return new Response("unexpected request", { status: 500 });
@@ -102,7 +106,7 @@ describe("one-shot Discord runtime completion", () => {
     );
     expect(state.discord_projection.status).toBe("complete");
     expect(state.discord_reconciliation.detail).toContain("3 threads");
-    expect(state.discord_gateway.detail).toContain("gateway-session");
+    expect(state.discord_gateway.detail).toContain("cloudflare-scheduled-reconciliation");
   });
 
   it("fails rather than claiming success when reconciliation is partial", async () => {

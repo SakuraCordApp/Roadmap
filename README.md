@@ -28,7 +28,8 @@ independent D1 database.
 - Cloudflare Worker, D1, cron, and static assets.
 - A signed HTTP contract with the independently deployable
   [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot), including
-  Cloudflare Durable Object and portable Node Gateway providers.
+  free-tier Cloudflare scheduled reconciliation and a portable real-time Node
+  Gateway provider.
 - A protocol-native MCP server with 15 required roadmap tools plus optional
   read-only application-repository inspection.
 - A valid Codex plugin and roadmap-management skill.
@@ -45,7 +46,7 @@ flowchart LR
   UI["Public React roadmap"] --> API["Cloudflare Worker API"]
   MCP["Codex plugin / MCP"] --> API
   DI["Discord interactions"] --> API
-  BOT["DiscordBot Gateway"] -->|"HMAC events"| API
+  BOT["DiscordBot scheduled sync / Node Gateway"] --> API
   API --> SYNC["Discord sync core"]
   API --> CORE["Typed roadmap engine"]
   API --> SYNC
@@ -76,10 +77,11 @@ npm run roadmap -- setup
 
 The wizard prints all local and external changes before applying them. It
 configures the project taxonomy, Cloudflare/D1, Discord, MCP, Codex, and optional
-initial data. It never writes tokens to tracked files. The Discord Gateway is a
-separate deployment; clone and deploy
-[DiscordBot](https://github.com/SakuraCordApp/DiscordBot) with the same bot token
-and Gateway-ingest secret before the wizard's final Gateway verification.
+initial data. It never writes tokens to tracked files. Discord synchronization
+is a separate deployment; clone and deploy
+[DiscordBot](https://github.com/SakuraCordApp/DiscordBot) with a Roadmap
+maintainer token and the matching Gateway-ingest secret before the wizard's
+final synchronization verification.
 
 For local-only development:
 

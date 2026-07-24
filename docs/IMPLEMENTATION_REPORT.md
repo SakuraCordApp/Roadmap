@@ -25,10 +25,11 @@ the core engine.
   paginated archived threads, messages, attachments, reactions, and tags.
 - The simplified Discord roadmap hashes only visible feature names and public
   section metadata. Detail-only changes do not cause message edits.
-- Cloudflare's 2026 outbound-WebSocket lifetime change makes a single small
-  Gateway session technically viable in a Durable Object. The portable Node
-  Gateway remains the default because it is operationally simpler and provides
-  a fallback for larger/sharded installations.
+- The free-tier Cloudflare provider schedules REST reconciliation every minute
+  because an outbound Gateway WebSocket keeps a Durable Object active and the
+  account's existing Gateway workload already consumes its daily duration
+  allowance. The portable Node Gateway remains available for real-time
+  delivery.
 - The MCP server implements the stable protocol directly over newline-delimited
   stdio and stateless HTTP. Local application-repository inspection uses
   argument-safe, read-only child processes and is opt-in.
@@ -54,9 +55,8 @@ the core engine.
 - `apps/worker`: public and maintainer API, D1 adapter, static public interface,
   authentication/authorization, CORS, rate limiting, replay defenses, Discord
   interactions, synchronization/reconciliation, cron jobs, and remote MCP.
-- `SakuraCordApp/DiscordBot`: independent Cloudflare Durable Object and
-  Node-compatible Gateway providers with minimal intents and authenticated
-  event ingress.
+- `SakuraCordApp/DiscordBot`: independent free-tier Cloudflare scheduled
+  reconciliation and Node-compatible real-time Gateway providers.
 - `apps/web`: configurable, responsive, keyboard-accessible roadmap overview,
   filters/search, direct item routes, and safe external links. The public
   surface shows only change, priority, kind, and status.
@@ -95,8 +95,8 @@ the core engine.
 - Provider-boundary orchestration tests verify that one-shot setup deploys a
   signature-capable Worker before Discord endpoint registration, stores
   Discord secrets first, redeploys IDs/tag mappings, performs a create/delete
-  permission test, publishes, reconciles, and confirms the Cloudflare Gateway
-  session.
+  permission test, publishes, reconciles, and confirms the Cloudflare
+  synchronization provider is healthy.
 - Resume regression coverage verifies that a run interrupted after Cloudflare
   skips project prompts, D1 creation, migrations, secret writes, and the first
   deployment before continuing with Discord.
@@ -145,6 +145,6 @@ following cannot be truthfully certified without an authorized real instance:
 - production backup restoration into a second Cloudflare account.
 
 For large Discord bots, sharding and Discord session-start coordination remain
-deployment-specific extensions. The included Durable Object provider is
-deliberately scoped to one small-instance Gateway session; the Node provider is
+deployment-specific extensions. The Cloudflare provider uses scheduled
+reconciliation; the Node provider is
 the documented fallback.

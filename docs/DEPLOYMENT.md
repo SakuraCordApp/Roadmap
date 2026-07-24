@@ -3,11 +3,11 @@
 ## Guided setup
 
 The Roadmap and DiscordBot repositories are independent clones. For a
-Cloudflare Gateway installation, deploy
+Cloudflare synchronization installation, deploy
 [`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot) first
-with the same `DISCORD_BOT_TOKEN` and `ROADMAP_GATEWAY_INGEST_SECRET` that this
-setup stores on Roadmap. No sibling directory, workspace link, or unpublished
-package is required.
+with a Roadmap maintainer `ROADMAP_TOKEN` and the same
+`ROADMAP_GATEWAY_INGEST_SECRET` that this setup stores on Roadmap. No sibling
+directory, workspace link, or unpublished package is required.
 
 Build the CLI, inspect the plan, then apply:
 
@@ -46,8 +46,8 @@ The wizard:
     lifecycle colors and applies the unified taxonomy to both forums;
 18. publishes the persistent simplified roadmap message and reconciles both
     forums; and
-19. starts and verifies the independently deployed DiscordBot Gateway when the
-    Cloudflare provider is selected.
+19. starts and verifies the independently deployed DiscordBot scheduled
+    reconciliation when the Cloudflare provider is selected.
 
 Progress is journaled in ignored `.roadmap/setup-state.json`, and non-secret
 wizard answers are cached in ignored `.roadmap/setup-answers.json`. Rerunning
@@ -157,14 +157,14 @@ npx wrangler deploy
 curl -fsS https://roadmap.example.com/healthz
 ```
 
-For the Cloudflare Gateway provider, deploy the separate DiscordBot after
+For the Cloudflare synchronization provider, deploy the separate DiscordBot after
 storing its matching secrets:
 
 ```sh
 git clone https://github.com/SakuraCordApp/DiscordBot.git
 cd DiscordBot
 npm install
-npx wrangler secret put DISCORD_BOT_TOKEN
+npx wrangler secret put ROADMAP_TOKEN
 npx wrangler secret put ROADMAP_GATEWAY_INGEST_SECRET
 npm run deploy
 ```
