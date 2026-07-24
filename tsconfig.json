@@ -1,0 +1,10 @@
+{
+  "files": [],
+  "references": [
+    { "path": "./packages/core" },
+    { "path": "./apps/worker" },
+    { "path": "./apps/web" },
+    { "path": "./packages/mcp" },
+    { "path": "./packages/cli" }
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "composite": true,
+    "rootDir": "../..",
+    "outDir": "dist-types",
+    "types": ["@cloudflare/workers-types"],
+    "tsBuildInfoFile": "dist-types/worker.tsbuildinfo"
+  },
+  "references": [{ "path": "../../packages/core" }, { "path": "../../packages/mcp" }],
+  "include": ["src/**/*.ts", "../../roadmap.config.ts", "../../roadmap.instance.json"],
+  "exclude": ["src/**/*.test.ts"]
+}

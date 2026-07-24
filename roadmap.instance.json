@@ -1,0 +1,57 @@
+{
+  "project": {
+    "name": "SakuraCord",
+    "slug": "sakuracord",
+    "idPrefix": "SCR",
+    "description": "Engineering roadmap for a native Swift and SwiftUI macOS Discord client.",
+    "publicUrl": "https://roadmap.sakuracord.app",
+    "applicationRepository": "/Users/super_original/Developer/My Own Projects/SakuraCord"
+  },
+  "branding": {
+    "primaryColor": "#F3A6C8",
+    "accentColor": "#D9578B",
+    "backgroundColor": "#0E0C13",
+    "logoUrl": "/brand/app-icon.webp",
+    "mobileLogoUrl": "/brand/mobile-logo.webp",
+    "mobileLogoWidth": 1200,
+    "mobileLogoHeight": 600,
+    "iconUrl": "/brand/icon.png"
+  },
+  "deployment": {
+    "workerName": "sakuracord-roadmap",
+    "d1DatabaseName": "sakuracord-roadmap",
+    "gatewayProvider": "cloudflare"
+  },
+  "discord": {
+    "guildId": "1528177363563581662",
+    "featureRequestsForumId": "1528181068576981103",
+    "bugReportsForumId": "1528179084432248932",
+    "roadmapChannelId": "1528180213912047806",
+    "updatesRoleId": "1528177363995590795",
+    "releaseAnnouncementChannelId": "1528180315233714368",
+    "maintainerRoleIds": ["1528177364033474641"],
+    "statusTagMappings": {
+      "1528181068576981103:inbox": "1530198625857179756",
+      "1528181068576981103:planned": "1530198625857179757",
+      "1528181068576981103:in_progress": "1530198625857179758",
+      "1528181068576981103:polishing": "1530198625890865232",
+      "1528181068576981103:done": "1530198625890865233",
+      "1528181068576981103:declined": "1530198625890865234",
+      "1528181068576981103:duplicate": "1530198625890865235",
+      "1528179084432248932:inbox": "1530198626972733637",
+      "1528179084432248932:planned": "1530198626972733638",
+      "1528179084432248932:in_progress": "1530198626972733639",
+      "1528179084432248932:polishing": "1530198627010613310",
+      "1528179084432248932:done": "1530198627010613311",
+      "1528179084432248932:declined": "1530198627010613312",
+      "1528179084432248932:duplicate": "1530198627010613313"
+    }
+  },
+  "releases": {
+    "enabled": true,
+    "githubRepository": "SakuraCordApp/SakuraCord",
+    "aiModel": "gpt-5.6-sol",
+    "reasoningEffort": "medium",
+    "maxCommits": 2000
+  }
+}

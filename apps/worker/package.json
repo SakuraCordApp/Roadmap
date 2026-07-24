@@ -1,0 +1,23 @@
+{
+  "name": "@roadmap/worker",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "wrangler deploy --dry-run --outdir dist",
+    "typecheck": "tsc -b --pretty false",
+    "dev": "wrangler dev --local",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@openai-oauth/core": "^2.0.0",
+    "@roadmap/core": "0.1.0",
+    "@roadmap/mcp": "0.1.0",
+    "hono": "^4.8.12",
+    "tweetnacl": "^1.0.3",
+    "zod": "^4.0.10"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20250726.0"
+  }
+}

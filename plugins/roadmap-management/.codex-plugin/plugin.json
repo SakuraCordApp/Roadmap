@@ -1,0 +1,24 @@
+{
+  "name": "roadmap-management",
+  "version": "0.1.0",
+  "description": "Manage a canonical self-hosted engineering roadmap with revision-safe MCP tools.",
+  "author": {
+    "name": "SakuraCord contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Roadmap Management",
+    "shortDescription": "Read and manage a self-hosted engineering roadmap.",
+    "longDescription": "Inspect roadmap state and history, create and revise items safely, reconcile Discord forums, and review a separately configured application repository without writing roadmap data into it.",
+    "developerName": "SakuraCord contributors",
+    "category": "Productivity",
+    "capabilities": ["Interactive", "Read", "Write"],
+    "defaultPrompt": [
+      "Show difficult features with unresolved research.",
+      "Create a roadmap item from this feature request.",
+      "Show everything changed on the roadmap this week."
+    ],
+    "brandColor": "#F3A6C8"
+  },
+  "mcpServers": "./.mcp.json"
+}

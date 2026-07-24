@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "roadmap": {
+      "command": "/Users/super_original/.codex/bin/sakuracord-roadmap-mcp",
+      "args": [],
+      "env": {
+        "ROADMAP_API_URL": "https://roadmap.sakuracord.app",
+        "ROADMAP_APP_REPOSITORY": "/Users/super_original/Developer/My Own Projects/SakuraCord"
+      }
+    }
+  }
+}

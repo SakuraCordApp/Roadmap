@@ -1,0 +1,51 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "sakuracord-roadmap",
+  "main": "apps/worker/src/index.ts",
+  "compatibility_date": "2026-07-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "assets": {
+    "directory": "apps/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    "run_worker_first": ["/api/*", "/interactions/*", "/webhooks/*", "/mcp*", "/healthz"],
+  },
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "sakuracord-roadmap",
+      "database_id": "dedb4e6e-2de8-4d9c-8405-fe7fa1e08ffd",
+      "migrations_dir": "migrations",
+    },
+  ],
+  "migrations": [
+    {
+      "tag": "v1",
+      "new_sqlite_classes": ["DiscordGatewayObject"],
+    },
+    {
+      "tag": "v2",
+      "deleted_classes": ["DiscordGatewayObject"],
+    },
+  ],
+  "triggers": {
+    "crons": ["* * * * *"],
+  },
+  "vars": {
+    "ROADMAP_PUBLIC_URL": "https://roadmap.sakuracord.app",
+    "ROADMAP_ALLOWED_ORIGINS": "https://roadmap.sakuracord.app",
+    "ROADMAP_GATEWAY_PROVIDER": "cloudflare",
+    "ROADMAP_DISCORD_BOT_URL": "https://discord-bot.sakuracord.app",
+  },
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+  },
+  "account_id": "20aea060f70461a418cf31bc70b79cdc",
+  "routes": [
+    {
+      "pattern": "roadmap.sakuracord.app",
+      "custom_domain": true,
+    },
+  ],
+}
