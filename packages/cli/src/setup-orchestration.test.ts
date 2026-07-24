@@ -91,6 +91,7 @@ import { setup } from "./setup.js";
 
 let temporaryRoot = "";
 let originalFetch: typeof fetch;
+let originalCloudflareAccountId: string | undefined;
 let stdoutWrite: { mockRestore(): void };
 
 beforeEach(async () => {
@@ -112,6 +113,8 @@ beforeEach(async () => {
   );
   process.env.ROADMAP_ADMIN_TOKEN = "admin-token";
   process.env.ROADMAP_GATEWAY_INGEST_SECRET = "gateway-secret";
+  originalCloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+  process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
   originalFetch = globalThis.fetch;
   globalThis.fetch = vi.fn(async (input) => {
     const pathname = new URL(String(input)).pathname;
@@ -156,6 +159,11 @@ afterEach(async () => {
   stdoutWrite.mockRestore();
   delete process.env.ROADMAP_ADMIN_TOKEN;
   delete process.env.ROADMAP_GATEWAY_INGEST_SECRET;
+  if (originalCloudflareAccountId === undefined) {
+    delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  } else {
+    process.env.CLOUDFLARE_ACCOUNT_ID = originalCloudflareAccountId;
+  }
   await rm(temporaryRoot, { recursive: true, force: true });
 });
 
