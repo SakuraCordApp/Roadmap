@@ -68,7 +68,9 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
           <h1 id="roadmap-title">
             <span translate="no">{config.project.name}</span> Roadmap
           </h1>
-          <p>A clear view of what is planned, in progress, polishing, and done.</p>
+          <p>
+            A clear view of new reports, planned work, active development, and completed changes.
+          </p>
           <a className="primary-action" href="#browse">
             Browse changes <span aria-hidden="true">↓</span>
           </a>

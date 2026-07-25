@@ -1,9 +1,17 @@
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { Miniflare } from "miniflare";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import roadmapConfig from "../../../../roadmap.config.js";
 import type { RoadmapEngine, RoadmapItem } from "@roadmap/core";
 import type { Env } from "../env.js";
 import { desiredForumTags } from "./forums.js";
-import { componentsV2RoadmapBody, DiscordSyncService } from "./sync.js";
+import {
+  combineUserReportText,
+  componentsV2RoadmapBody,
+  DiscordSyncService,
+  reportCreatedContent,
+} from "./sync.js";
 
 describe("Discord roadmap completion synchronization", () => {
   const originalFetch = globalThis.fetch;
@@ -44,6 +52,7 @@ describe("Discord roadmap completion synchronization", () => {
         return Response.json({ id: "ok" });
       }) as typeof fetch;
       const state = new Map<string, string>();
+      state.set("thread_status:thread", "in_progress");
       const db = {
         prepare(sql: string) {
           let values: unknown[] = [];
@@ -159,9 +168,14 @@ describe("Discord Components V2 roadmap layout", () => {
 
     expect(body.flags).toBe(1 << 15);
     expect(body.components).toHaveLength(roadmapConfig.publicSections.length + 2);
-    expect(body.components.filter((component) => component.type === 17)).toHaveLength(5);
+    expect(body.components.filter((component) => component.type === 17)).toHaveLength(
+      roadmapConfig.publicSections.length + 1,
+    );
     expect(body.components.at(-1)?.type).toBe(1);
-    const planned = body.components[1]!;
+    const planned =
+      body.components[
+        roadmapConfig.publicSections.findIndex((section) => section.id === "planned") + 1
+      ]!;
     expect(planned.accent_color).toBe(Number.parseInt("#60A5FA".slice(1), 16));
     expect(planned.components?.[0]?.content).toContain(
       "<:sakura_tag_planned:emoji-planned> Planned",
@@ -173,6 +187,210 @@ describe("Discord Components V2 roadmap layout", () => {
     expect(planned.components?.[0]?.content).toContain("🪲 Bug Tracking");
     expect(JSON.stringify(body)).not.toContain("/items/");
     expect(countComponents(body.components)).toBeLessThanOrEqual(40);
+  });
+});
+
+describe("Discord report copy and context", () => {
+  it("uses reporter follow-ups as evidence while excluding bot messages", () => {
+    expect(
+      combineUserReportText(
+        [
+          {
+            id: "bot-response",
+            content: "I still need more information.",
+            timestamp: "2026-07-25T10:02:00.000Z",
+            author: { bot: true },
+          },
+          {
+            id: "follow-up",
+            content: "It happens in the main chat after loading older messages.",
+            timestamp: "2026-07-25T10:03:00.000Z",
+            author: {},
+          },
+          {
+            id: "starter",
+            content: "Scrolling lags.",
+            timestamp: "2026-07-25T10:01:00.000Z",
+            author: {},
+          },
+        ],
+        "starter",
+        "fallback",
+      ),
+    ).toBe(
+      [
+        "Initial report:\nScrolling lags.",
+        "Follow-up message:\nIt happens in the main chat after loading older messages.",
+      ].join("\n\n"),
+    );
+  });
+
+  it("confirms creation without asking the reporter for more details", () => {
+    const content = reportCreatedContent(
+      "SCR-01K00000000000000000000001",
+      {
+        title: "Scrolling stalls in long channels",
+        classification: "functionality",
+      },
+      "Medium",
+    );
+
+    expect(content).toContain("Roadmap report created");
+    expect(content).toContain("Scrolling stalls in long channels");
+    expect(content).toContain("Status: **Planned**");
+    expect(content).not.toMatch(/still need|missing information|follow.?up/i);
+  });
+});
+
+describe("Discord scheduled reconciliation", () => {
+  const originalFetch = globalThis.fetch;
+
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("bootstraps an already-discovered unlinked report exactly once", async () => {
+    const miniflare = new Miniflare({
+      modules: true,
+      script: "export default { fetch() { return new Response('ok') } }",
+      d1Databases: ["DB"],
+    });
+    try {
+      const db = (await miniflare.getD1Database("DB")) as unknown as D1Database;
+      for (const name of ["0001_initial.sql", "0003_report_automation.sql"]) {
+        const migration = await readFile(path.resolve("migrations", name), "utf8");
+        for (const statement of migration
+          .split(/;\n\n/)
+          .map((value) => value.trim())
+          .filter(Boolean)) {
+          await db.prepare(statement).run();
+        }
+      }
+
+      const threadId = "1530406149856428172";
+      const guildId = roadmapConfig.discord.guildId!;
+      const bugForumId = roadmapConfig.discord.bugReportsForumId!;
+      const featureForumId = roadmapConfig.discord.featureRequestsForumId!;
+      const createdAt = "2026-07-25T02:47:39.697Z";
+      await db
+        .prepare(
+          `INSERT INTO discord_submissions(
+             thread_id,forum_id,guild_id,kind,title,author_id,starter_message_id,
+             archived,locked,applied_tags_json,created_at,updated_at
+           ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .bind(
+          threadId,
+          bugForumId,
+          guildId,
+          "bug_report",
+          "Message rendering",
+          "reporter",
+          threadId,
+          0,
+          0,
+          "[]",
+          createdAt,
+          createdAt,
+        )
+        .run();
+
+      const requests: Array<{ method: string; path: string }> = [];
+      globalThis.fetch = vi.fn(async (input, init) => {
+        const url = new URL(String(input));
+        const method = init?.method ?? "GET";
+        requests.push({ method, path: url.pathname });
+        if (url.pathname.endsWith(`/guilds/${guildId}/threads/active`)) {
+          return Response.json({
+            threads: [
+              {
+                id: threadId,
+                guild_id: guildId,
+                parent_id: bugForumId,
+                name: "Message rendering",
+                owner_id: "reporter",
+                applied_tags: [],
+                thread_metadata: {
+                  archived: false,
+                  locked: false,
+                  create_timestamp: createdAt,
+                  archive_timestamp: createdAt,
+                },
+              },
+            ],
+          });
+        }
+        if (
+          url.pathname.endsWith(`/channels/${featureForumId}/threads/archived/public`) ||
+          url.pathname.endsWith(`/channels/${bugForumId}/threads/archived/public`)
+        ) {
+          return Response.json({ threads: [], has_more: false });
+        }
+        if (url.pathname.endsWith(`/channels/${threadId}/messages`)) {
+          return Response.json([
+            {
+              id: threadId,
+              channel_id: threadId,
+              content: "Messages overlap after loading history.",
+              timestamp: createdAt,
+              author: { id: "reporter" },
+              attachments: [],
+            },
+          ]);
+        }
+        return Response.json({ id: "ok" });
+      }) as typeof fetch;
+
+      const env = {
+        DB: db,
+        DISCORD_BOT_TOKEN: "discord-bot-token-for-tests",
+      } as Env;
+      const engine = {} as RoadmapEngine;
+      const sync = new DiscordSyncService(env, roadmapConfig, engine);
+
+      await expect(sync.reconcile()).resolves.toMatchObject({ threads: 1, errors: [] });
+      await expect(sync.reconcile()).resolves.toMatchObject({ threads: 1, errors: [] });
+
+      const job = await db
+        .prepare(
+          "SELECT status,count(*) AS count FROM discord_report_jobs WHERE thread_id=? GROUP BY status",
+        )
+        .bind(threadId)
+        .first<{ status: string; count: number }>();
+      expect(job).toEqual({ status: "pending", count: 1 });
+      await db
+        .prepare(
+          "UPDATE discord_report_jobs SET status='processing',locked_at=datetime('now') WHERE thread_id=?",
+        )
+        .bind(threadId)
+        .run();
+      await expect(sync.reconcile()).resolves.toMatchObject({ threads: 1, errors: [] });
+      expect(
+        await db
+          .prepare("SELECT status FROM discord_report_jobs WHERE thread_id=?")
+          .bind(threadId)
+          .first<{ status: string }>(),
+      ).toEqual({ status: "processing" });
+      expect(
+        await db
+          .prepare("SELECT content FROM discord_submissions WHERE thread_id=?")
+          .bind(threadId)
+          .first<{ content: string }>(),
+      ).toEqual({ content: "Messages overlap after loading history." });
+      expect(
+        requests.filter(
+          (request) =>
+            request.method === "POST" && request.path.endsWith(`/channels/${threadId}/messages`),
+        ),
+      ).toHaveLength(1);
+      expect(
+        requests.filter(
+          (request) => request.method === "PATCH" && request.path.endsWith(`/channels/${threadId}`),
+        ),
+      ).toHaveLength(1);
+    } finally {
+      await miniflare.dispose();
+    }
   });
 });
 

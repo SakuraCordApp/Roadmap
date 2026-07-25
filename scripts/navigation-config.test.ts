@@ -15,6 +15,12 @@ describe("SakuraCord public navigation configuration", () => {
       "low",
     ]);
     expect(roadmapConfig.itemTypes.map(({ id }) => id)).toEqual(["feature", "bug"]);
+    expect(roadmapConfig.publicSections.map(({ id }) => id)).toEqual([
+      "planned",
+      "in_progress",
+      "polishing",
+      "recently_done",
+    ]);
   });
 
   it("publishes the verified repository without advertising a docs page", () => {

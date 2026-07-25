@@ -224,7 +224,7 @@ export class DiscordSyncService {
       );
       const stateKey = `thread_status:${thread.threadId}`;
       const previousStatus = await this.getState(stateKey);
-      if (previousStatus !== item.status && item.status !== "inbox") {
+      if (previousStatus && previousStatus !== item.status && item.status !== "inbox") {
         const completion =
           item.status === "done"
             ? thread.kind === "bug_report"
@@ -323,6 +323,7 @@ export class DiscordSyncService {
           if (messages.length < 100) break;
           before = messages.at(-1)?.id;
         }
+        await this.ensureReportAutomation(thread);
       } catch (error) {
         errors.push(`${thread.id}: ${redactError(error)}`);
       }
@@ -380,9 +381,7 @@ export class DiscordSyncService {
     switch (event.type) {
       case "THREAD_CREATE":
         await this.upsertThread(data as DiscordThread);
-        await this.applyInitialInboxTag(data as DiscordThread);
-        await this.enqueueReportAnalysis(String(data.id));
-        await this.postReviewControls(data as DiscordThread);
+        await this.ensureReportAutomation(data as DiscordThread);
         return;
       case "THREAD_UPDATE":
         await this.upsertThread(data as DiscordThread);
@@ -633,20 +632,27 @@ export class DiscordSyncService {
         .bind(threadId)
         .first()) as typeof submission;
     }
-    const attachments = parseAttachments(submission.attachments_json);
+    const threadMessages = await this.fetchThreadMessages(threadId);
+    const attachments = threadMessages
+      .filter((message) => !message.author.bot)
+      .flatMap((message) => message.attachments ?? [])
+      .slice(0, 20);
+    const reportAttachments = attachments.length
+      ? attachments
+      : parseAttachments(submission.attachments_json);
     const selectedTags = await resolveAppliedTagNames(rest, thread);
     const analysis = await analyzeDiscordReport(this.env, this.config, {
       kind: submission.kind,
       title: submission.title,
-      content: submission.content || submission.title,
+      content: combineUserReportText(
+        threadMessages,
+        submission.starter_message_id,
+        submission.content || submission.title,
+      ),
       selectedTags,
-      attachments,
+      attachments: reportAttachments,
     });
     const threadUrl = `https://discord.com/channels/${submission.guild_id}/${threadId}`;
-    const requiredResearch = [
-      ...analysis.requiredResearch,
-      ...analysis.missingInformation.map((value) => `Missing report information: ${value}`),
-    ];
     const created = await this.engine.create(
       CreateRoadmapItemSchema.parse({
         title: analysis.title,
@@ -654,17 +660,17 @@ export class DiscordSyncService {
         type: submission.kind === "bug_report" ? "bug" : "feature",
         labels: [analysis.classification],
         area: analysis.area,
-        status: "inbox",
+        status: "planned",
         priority: analysis.priority,
         difficulty: analysis.difficulty,
         confidence: analysis.confidence,
         proposedImplementation: analysis.proposedImplementation,
         affectedComponents: analysis.affectedComponents,
         risks: analysis.risks,
-        requiredResearch,
+        requiredResearch: analysis.requiredResearch,
         references: [
           { kind: "research", label: "Discord forum submission", url: threadUrl },
-          ...attachmentReferences(attachments),
+          ...attachmentReferences(reportAttachments),
         ],
         acceptanceCriteria: buildAcceptanceCriteria(analysis.acceptanceCriteria),
         linkedDiscordThreads: [
@@ -696,17 +702,14 @@ export class DiscordSyncService {
       .bind(created.after.id, new Date().toISOString(), threadId)
       .run();
     await this.syncItem(created.after.id);
-    const infoLine = analysis.needsInformation
-      ? `\nI still need: ${analysis.missingInformation.map(escapeDiscord).join("; ")}`
-      : "";
     await rest.post(
       `/channels/${threadId}/messages`,
       {
-        content: [
-          `**Roadmap report created — ${escapeDiscord(created.after.id)}**`,
-          escapeDiscord(analysis.summary),
-          `Classification: **${escapeDiscord(analysis.classification === "visual" ? "Visual" : "Functionality")}** · Priority: **${escapeDiscord(this.priorityLabel(analysis.priority))}** · Status: **Inbox**${infoLine}`,
-        ].join("\n"),
+        content: reportCreatedContent(
+          created.after.id,
+          analysis,
+          this.priorityLabel(analysis.priority),
+        ),
         allowed_mentions: safeAllowedMentions(),
       },
       `report-analysis:${threadId}`,
@@ -714,15 +717,35 @@ export class DiscordSyncService {
     return { itemId: created.after.id, analysis };
   }
 
+  private async fetchThreadMessages(threadId: string): Promise<DiscordMessage[]> {
+    const rest = this.requireRest();
+    const messages: DiscordMessage[] = [];
+    let before: string | undefined;
+    for (;;) {
+      const query = before ? `?limit=100&before=${before}` : "?limit=100";
+      const page = await rest.get<DiscordMessage[]>(`/channels/${threadId}/messages${query}`);
+      messages.push(...page);
+      for (const message of page) await this.upsertMessage(message);
+      if (page.length < 100) break;
+      before = page.at(-1)?.id;
+      if (!before) break;
+    }
+    return messages;
+  }
+
   private async enqueueReportAnalysis(threadId: string, ready = false): Promise<void> {
     await this.env.DB.prepare(
       `INSERT INTO discord_report_jobs(thread_id,status)
        VALUES(?,'pending')
        ON CONFLICT(thread_id) DO UPDATE SET
-         status=IIF(status='complete','complete','pending'),
-         available_at=IIF(status='complete',available_at,strftime('%Y-%m-%dT%H:%M:%fZ','now')),
-         locked_at=IIF(status='complete',locked_at,NULL),
-         last_error=IIF(status='complete',last_error,NULL)`,
+         status=IIF(status IN ('complete','processing'),status,'pending'),
+         available_at=IIF(
+           status IN ('complete','processing'),
+           available_at,
+           strftime('%Y-%m-%dT%H:%M:%fZ','now')
+         ),
+         locked_at=IIF(status IN ('complete','processing'),locked_at,NULL),
+         last_error=IIF(status IN ('complete','processing'),last_error,NULL)`,
     )
       .bind(threadId)
       .run();
@@ -732,10 +755,28 @@ export class DiscordSyncService {
          SET status='pending',
              available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
              locked_at=NULL
-         WHERE thread_id=? AND status!='complete'`,
+         WHERE thread_id=? AND status NOT IN ('complete','processing')`,
       )
         .bind(threadId)
         .run();
+    }
+  }
+
+  private async ensureReportAutomation(thread: DiscordThread): Promise<void> {
+    const submission = await this.env.DB.prepare(
+      `SELECT review_state,linked_item_id
+       FROM discord_submissions WHERE thread_id=?`,
+    )
+      .bind(thread.id)
+      .first<{ review_state: string; linked_item_id: string | null }>();
+    if (!submission || submission.review_state !== "inbox" || submission.linked_item_id) {
+      return;
+    }
+
+    await this.enqueueReportAnalysis(thread.id, true);
+    if (!(await this.getState(`review_controls:${thread.id}`))) {
+      await this.applyInitialInboxTag(thread);
+      await this.postReviewControls(thread);
     }
   }
 
@@ -870,6 +911,39 @@ export function componentsV2RoadmapBody(
     },
   ];
   return { flags: 1 << 15, components, allowed_mentions: safeAllowedMentions() };
+}
+
+export function combineUserReportText(
+  messages: Array<{
+    id: string;
+    content: string;
+    timestamp: string;
+    author: { bot?: boolean };
+  }>,
+  starterMessageId: string | null,
+  fallback: string,
+): string {
+  const report = messages
+    .filter((message) => !message.author.bot && message.content.trim())
+    .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))
+    .map((message) => {
+      const label = message.id === starterMessageId ? "Initial report" : "Follow-up message";
+      return `${label}:\n${message.content.trim()}`;
+    })
+    .join("\n\n");
+  return sanitizeText(report || fallback, 40_000);
+}
+
+export function reportCreatedContent(
+  itemId: string,
+  analysis: { title: string; classification: "visual" | "functionality" },
+  priorityLabel: string,
+): string {
+  return [
+    `**Roadmap report created — ${escapeDiscord(itemId)}**`,
+    `**${escapeDiscord(analysis.title)}**`,
+    `Classification: **${analysis.classification === "visual" ? "Visual" : "Functionality"}** · Priority: **${escapeDiscord(priorityLabel)}** · Status: **Planned**`,
+  ].join("\n");
 }
 
 function customEmoji(key: string, emojiIds: Map<string, string>): string {
