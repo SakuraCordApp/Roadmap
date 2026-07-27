@@ -73,14 +73,12 @@ Cloudflare/CLI:
 
 ```sh
 npx wrangler secret put ROADMAP_ADMIN_TOKEN
-npx wrangler secret put ROADMAP_GATEWAY_INGEST_SECRET
 npx wrangler secret put GITHUB_RELEASE_TOKEN
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
 ```
 
-Update the DiscordBot ingest secret at the same time to avoid a split
-configuration. Rotate the Discord bot token in the Developer Portal, then
-update Worker and Node environments before restarting either provider.
+Rotate the Discord bot token in the Developer Portal, then update both
+Cloudflare Workers before redeploying them.
 
 Do not rotate `ROADMAP_OAUTH_ENCRYPTION_KEY` independently. Disconnect the AI
 session, replace the key, then run `roadmap releases connect-ai` so no

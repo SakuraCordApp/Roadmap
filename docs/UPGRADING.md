@@ -22,6 +22,14 @@ Migration `0003_report_automation.sql` advances schema metadata to version 3
 and adds resumable Discord report-analysis jobs. Existing roadmap items and
 Discord submission records are unchanged.
 
+Migration `0004_reliable_jobs.sql` advances schema metadata to version 4, adds
+recoverable Discord interaction jobs, and allows report jobs to request a rerun
+when forum content changes during processing.
+
+Migration `0005_report_job_recovery.sql` advances schema metadata to version 5
+and safely requeues unlinked report-analysis jobs that exhausted the earlier
+stale-lock retry loop.
+
 ## Schema policy
 
 - Never edit an already-applied migration.

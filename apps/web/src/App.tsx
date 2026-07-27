@@ -2,13 +2,13 @@ import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import { fetchConfig, type PublicConfig } from "./api.js";
 import { type LoadState, toMessage } from "./load-state.js";
 import { buildPrimaryNavigation } from "./navigation.js";
+import { ItemDetail } from "./ItemDetail.js";
 import { RoadmapOverview } from "./RoadmapOverview.js";
 import { ErrorPage, LoadingPage } from "./ui.js";
 
 export function App() {
-  if (/^\/items\/[^/]+\/?$/.test(window.location.pathname)) {
-    window.history.replaceState(null, "", "/");
-  }
+  const detailMatch = /^\/items\/([^/]+)\/?$/.exec(window.location.pathname);
+  const detailId = detailMatch ? decodePathSegment(detailMatch[1]!) : null;
   const [config, setConfig] = useState<LoadState<PublicConfig>>({ state: "loading" });
 
   useEffect(() => {
@@ -16,13 +16,13 @@ export function App() {
     fetchConfig(controller.signal)
       .then((value) => {
         setConfig({ state: "ready", value });
-        document.title = `${value.project.name} Engineering Roadmap`;
+        if (!detailId) document.title = `${value.project.name} Engineering Roadmap`;
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) setConfig({ state: "error", message: toMessage(error) });
       });
     return () => controller.abort();
-  }, []);
+  }, [detailId]);
 
   if (config.state === "loading") return <LoadingPage />;
   if (config.state === "error") return <ErrorPage message={config.message} />;
@@ -37,11 +37,23 @@ export function App() {
 
   return (
     <div className="app-shell" style={theme}>
-      <PageShell config={value} isDetail={false}>
-        <RoadmapOverview config={value} />
+      <PageShell config={value} isDetail={Boolean(detailId)}>
+        {detailId ? (
+          <ItemDetail config={value} id={detailId} />
+        ) : (
+          <RoadmapOverview config={value} />
+        )}
       </PageShell>
     </div>
   );
+}
+
+function decodePathSegment(value: string): string {
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
 }
 
 function PageShell({

@@ -230,13 +230,13 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
     {
       title: "Create roadmap item",
       description:
-        "Create a validated canonical roadmap item. Community submissions should remain in inbox until a maintainer explicitly accepts them.",
+        "Create a validated canonical roadmap item. New community submissions enter Planned after automated analysis.",
       inputSchema: {
         title: z.string().min(1).max(180),
         description: z.string().min(1).max(20_000),
         type: z.string().min(1),
         area: z.string().min(1),
-        status: z.string().default("inbox"),
+        status: z.string().default("planned"),
         priority: z.string().min(1),
         difficulty: z.string().min(1),
         confidence: z.number().int().min(0).max(100).optional(),

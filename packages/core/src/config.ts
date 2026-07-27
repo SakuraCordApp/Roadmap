@@ -125,7 +125,7 @@ export const RoadmapConfigSchema = z
         provider: z.literal("cloudflare"),
         workerName: z.string().regex(/^[a-z0-9-]+$/),
         d1DatabaseName: z.string().regex(/^[a-z0-9-]+$/),
-        gatewayProvider: z.enum(["cloudflare", "node", "disabled"]),
+        gatewayProvider: z.enum(["cloudflare", "disabled"]),
       })
       .strict(),
   })

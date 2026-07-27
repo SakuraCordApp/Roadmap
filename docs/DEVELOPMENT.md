@@ -72,9 +72,9 @@ Implement `RoadmapStorage` and pass the same core engine suite. The provider
 must atomically couple the canonical change with audit history and sync-job
 creation. A repository adapter that commits files is intentionally invalid.
 
-## Adding a deployment or Gateway provider
+## Discord synchronization development
 
-Keep provider code in
+Keep the scheduled reconciliation transport in
 [`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot).
-Normalize Gateway events into `DiscordGatewayEventSchema`; do not duplicate forum/business logic in the
-provider.
+Forum and roadmap business logic remains in Roadmap; the bot only invokes the
+authenticated reconciliation endpoint.

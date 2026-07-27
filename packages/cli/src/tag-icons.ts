@@ -22,7 +22,6 @@ const DEFAULT_PRIORITIES: ColoredOption[] = [
 ];
 
 const DEFAULT_LIFECYCLE: ColoredOption[] = [
-  { id: "inbox", color: "#94A3B8" },
   { id: "planned", color: "#60A5FA" },
   { id: "in_progress", color: "#A78BFA" },
   { id: "polishing", color: "#F3A6C8" },

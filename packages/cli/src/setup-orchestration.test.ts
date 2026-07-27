@@ -112,7 +112,6 @@ beforeEach(async () => {
     }\n`,
   );
   process.env.ROADMAP_ADMIN_TOKEN = "admin-token";
-  process.env.ROADMAP_GATEWAY_INGEST_SECRET = "gateway-secret";
   originalCloudflareAccountId = process.env.CLOUDFLARE_ACCOUNT_ID;
   process.env.CLOUDFLARE_ACCOUNT_ID = "account-id";
   originalFetch = globalThis.fetch;
@@ -158,7 +157,6 @@ afterEach(async () => {
   globalThis.fetch = originalFetch;
   stdoutWrite.mockRestore();
   delete process.env.ROADMAP_ADMIN_TOKEN;
-  delete process.env.ROADMAP_GATEWAY_INGEST_SECRET;
   if (originalCloudflareAccountId === undefined) {
     delete process.env.CLOUDFLARE_ACCOUNT_ID;
   } else {
@@ -303,7 +301,7 @@ describe("complete setup orchestration", () => {
         },
         d1_migrations: {
           status: "complete",
-          detail: "Remote migrations applied through schema 3",
+          detail: "Remote migrations applied through schema 4",
           updatedAt: new Date().toISOString(),
         },
       }),
@@ -386,7 +384,7 @@ describe("complete setup orchestration", () => {
       path.join(roadmapDirectory, "setup-state.json"),
       JSON.stringify({
         project_configuration: complete("configured"),
-        d1_migrations: complete("Remote migrations applied through schema 3"),
+        d1_migrations: complete("Remote migrations applied through schema 4"),
         cloudflare_deploy: complete("deployed"),
         discord_configuration: complete("configured"),
         discord_deployment: {
@@ -480,7 +478,7 @@ describe("complete setup orchestration", () => {
       path.join(roadmapDirectory, "setup-state.json"),
       JSON.stringify({
         project_configuration: complete("configured"),
-        d1_migrations: complete("Remote migrations applied through schema 3"),
+        d1_migrations: complete("Remote migrations applied through schema 4"),
         cloudflare_deploy: complete("deployed"),
         release_infrastructure: complete("webhook and secrets configured"),
         release_ai: {

@@ -5,9 +5,8 @@
 The Roadmap and DiscordBot repositories are independent clones. For a
 Cloudflare synchronization installation, deploy
 [`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot) first
-with a Roadmap maintainer `ROADMAP_TOKEN` and the same
-`ROADMAP_GATEWAY_INGEST_SECRET` that this setup stores on Roadmap. No sibling
-directory, workspace link, or unpublished package is required.
+with a Roadmap maintainer `ROADMAP_TOKEN`. No sibling directory, workspace
+link, or unpublished package is required.
 
 Build the CLI, inspect the plan, then apply:
 
@@ -26,7 +25,7 @@ The wizard:
 3. verifies Wrangler authentication;
 4. discovers or creates the named D1 database idempotently;
 5. applies migrations;
-6. stores bootstrap and Gateway secrets with Wrangler;
+6. stores the bootstrap secret with Wrangler;
 7. builds, deploys, and waits for `/healthz`;
 8. validates Discord and maps/creates bootstrap status tags;
 9. stores the Discord verification key before registering the interaction
@@ -84,7 +83,7 @@ npm run roadmap -- setup \
   --application-repository /workspace/my-project \
   --public-url https://roadmap.example.com \
   --id-prefix MPR \
-  --gateway-provider node \
+  --gateway-provider cloudflare \
   --mcp-mode remote \
   --initial-data empty \
   --skip-discord
@@ -93,7 +92,6 @@ npm run roadmap -- setup \
 Set secrets in the CI secret store:
 
 - `ROADMAP_ADMIN_TOKEN` (optional; generated if absent)
-- `ROADMAP_GATEWAY_INGEST_SECRET` (optional; generated if absent)
 - Discord values when Discord setup is enabled
 
 For a fully non-interactive Discord run, set `DISCORD_BOT_TOKEN` and pass:
@@ -145,7 +143,6 @@ npx wrangler d1 create my-project-roadmap
 # Put the returned database_id in wrangler.jsonc.
 npx wrangler d1 migrations apply my-project-roadmap --remote
 npx wrangler secret put ROADMAP_ADMIN_TOKEN
-npx wrangler secret put ROADMAP_GATEWAY_INGEST_SECRET
 npx wrangler secret put DISCORD_BOT_TOKEN
 npx wrangler secret put DISCORD_APPLICATION_ID
 npx wrangler secret put DISCORD_PUBLIC_KEY
@@ -165,7 +162,6 @@ git clone https://github.com/SakuraCordApp/DiscordBot.git
 cd DiscordBot
 npm install
 npx wrangler secret put ROADMAP_TOKEN
-npx wrangler secret put ROADMAP_GATEWAY_INGEST_SECRET
 npm run deploy
 ```
 

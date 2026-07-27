@@ -22,14 +22,13 @@ independent D1 database.
 - Authenticated maintainer mutation endpoints with explicit lifecycle gates.
 - A simplified, feature-name-only Discord projection that edits one existing
   message and skips unchanged visible hashes.
-- Feature Request and Bug Report forum ingestion, replies, attachments,
-  reactions, moderated status tags, review controls, reconciliation, and
+- Feature Request and Bug Report forum ingestion, bot-mentioned follow-up evidence,
+  attachments, reactions, moderated status tags, reconciliation, and
   active/archived thread support.
 - Cloudflare Worker, D1, cron, and static assets.
-- A signed HTTP contract with the independently deployable
-  [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot), including
-  free-tier Cloudflare scheduled reconciliation and a portable real-time Node
-  Gateway provider.
+- An independently deployable
+  [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot) using
+  free-tier Cloudflare scheduled reconciliation and queued GitHub notifications.
 - A protocol-native MCP server with 15 required roadmap tools plus optional
   read-only application-repository inspection.
 - A valid Codex plugin and roadmap-management skill.
@@ -46,7 +45,7 @@ flowchart LR
   UI["Public React roadmap"] --> API["Cloudflare Worker API"]
   MCP["Codex plugin / MCP"] --> API
   DI["Discord interactions"] --> API
-  BOT["DiscordBot scheduled sync / Node Gateway"] --> API
+  BOT["DiscordBot scheduled sync"] --> API
   API --> SYNC["Discord sync core"]
   API --> CORE["Typed roadmap engine"]
   API --> SYNC
@@ -80,8 +79,7 @@ configures the project taxonomy, Cloudflare/D1, Discord, MCP, Codex, and optiona
 initial data. It never writes tokens to tracked files. Discord synchronization
 is a separate deployment; clone and deploy
 [DiscordBot](https://github.com/SakuraCordApp/DiscordBot) with a Roadmap
-maintainer token and the matching Gateway-ingest secret before the wizard's
-final synchronization verification.
+maintainer token before the wizard's final synchronization verification.
 
 For local-only development:
 

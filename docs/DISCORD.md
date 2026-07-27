@@ -94,8 +94,8 @@ Both forums use one taxonomy:
 
 - members choose `Visual` or `Functionality` plus `Critical`, `High`, `Medium`,
   or `Low`;
-- the bot owns the moderated `Inbox`, `Planned`, `In Progress`, `Polishing`,
-  `Done`, `Declined`, and `Duplicate` tags; and
+- the bot owns the moderated `Planned`, `In Progress`, `Polishing`, `Done`,
+  `Declined`, and `Duplicate` tags; and
 - every tag uses a custom guild emoji generated from the rounded SVG sources
   under `assets/discord-tag-icons`.
 
@@ -103,28 +103,20 @@ Both forums use one taxonomy:
 authentication, or loss of the core app. Major daily-usability features and
 failures use `High`; bounded work normally uses `Medium` or `Low`.
 
-New threads enter `inbox`. A durable analysis job reads the starter text and
-supported image/file attachments through the connected ChatGPT session. It
-creates one canonical bug or feature item, links it back to the forum post, and
-corrects classification and priority when the submitted evidence warrants it.
-Files remain Discord-hosted references; they are not copied into canonical
-roadmap storage.
+New threads enter an internal pending-analysis queue. A durable analysis job
+reads the starter text and supported image/file attachments through the
+connected ChatGPT session. It creates one canonical bug or feature item in
+`planned`, links it back to the forum post, and corrects classification and
+priority when the submitted evidence warrants it. Files remain Discord-hosted
+references; they are not copied into canonical roadmap storage.
 
-The bot also posts maintainer controls:
-
-- Accept as a new roadmap item
-- Link to an existing item
-- Decline with a reason
-- Mark as duplicate
-- Request more information
-- Change linked status
-- Reopen
-- Archive
-
-Accept moves the automatically created Inbox item to Planned and can revise its
-generated title, description, and area. Only members with a configured
-`maintainerRoleIds` role can use mutation controls. Empty role configuration
-intentionally authorizes nobody.
+Ordinary thread conversation is not roadmap evidence and does not trigger
+reanalysis. To incorporate a relevant follow-up comment or file, mention the
+SakuraCord bot in that message. The starter message is always evidence; after
+creation, only changes to user-authored messages or attachments that mention
+the bot can update the item. Bot, application, webhook, and ordinary unmentioned
+messages are ignored. Mentioned material that is unrelated to the initial
+report is explicitly excluded from the analysis.
 
 Canonical lifecycle changes automatically replace the bot-managed status tag.
 When an item reaches Done, the bot posts either “Bug fixed” or “Feature

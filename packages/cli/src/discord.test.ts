@@ -47,19 +47,13 @@ const releaseAnnouncementChannelId = "55555555555555556";
 const maintainerRoleId = "66666666666666666";
 const updatesRoleId = "88888888888888888";
 const botRoleId = "99999999999999998";
-const requiredTags = [
-  "Inbox",
-  "Planned",
-  "In Progress",
-  "Polishing",
-  "Done",
-  "Declined",
-  "Duplicate",
-].map((name, index) => ({
-  id: `7777777777777777${index}`,
-  name,
-  moderated: true,
-}));
+const requiredTags = ["Planned", "In Progress", "Polishing", "Done", "Declined", "Duplicate"].map(
+  (name, index) => ({
+    id: `7777777777777777${index}`,
+    name,
+    moderated: true,
+  }),
+);
 
 let temporaryRoot = "";
 let originalFetch: typeof fetch;

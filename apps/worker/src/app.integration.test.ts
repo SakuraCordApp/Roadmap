@@ -26,6 +26,7 @@ describe("public and maintainer API", () => {
       "0001_initial.sql",
       "0002_release_automation.sql",
       "0003_report_automation.sql",
+      "0004_reliable_jobs.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration
@@ -171,6 +172,30 @@ describe("public and maintainer API", () => {
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("https://roadmap.sakuracord.app/");
     expect(response.headers.get("x-content-type-options")).toBe("nosniff");
+  });
+
+  it("bounds JSON bodies, validates queries, and honors conditional reads", async () => {
+    const oversized = await call("/api/v1/validate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: `"${"x".repeat(1_048_576)}"`,
+    });
+    expect(oversized.status).toBe(413);
+    await expect(oversized.json<any>()).resolves.toMatchObject({
+      error: { code: "PAYLOAD_TOO_LARGE" },
+    });
+
+    const invalidLimit = await call("/api/v1/items?limit=not-a-number");
+    expect(invalidLimit.status).toBe(422);
+
+    const initial = await call("/api/v1/items");
+    const etag = initial.headers.get("ETag");
+    expect(etag).toBeTruthy();
+    const unchanged = await call("/api/v1/items", {
+      headers: { "If-None-Match": etag! },
+    });
+    expect(unchanged.status).toBe(304);
+    expect(await unchanged.text()).toBe("");
   });
 
   function mutationHeaders(idempotencyKey: string): Record<string, string> {

@@ -475,6 +475,7 @@ button {
   align-items: center;
   gap: 0.7rem;
   overflow: hidden;
+  color: inherit;
   padding: 1rem;
   border: 1px solid color-mix(in srgb, var(--priority-color) 24%, var(--line));
   border-radius: 0.65rem;
@@ -483,6 +484,15 @@ button {
     color-mix(in srgb, var(--priority-color) 11%, var(--panel)),
     color-mix(in srgb, var(--priority-color) 3%, var(--panel))
   );
+  text-decoration: none;
+  transition:
+    border-color 140ms ease,
+    transform 140ms ease;
+}
+
+.roadmap-item:hover {
+  border-color: color-mix(in srgb, var(--priority-color) 55%, var(--line));
+  transform: translateY(-1px);
 }
 
 .roadmap-item--critical {

@@ -1,11 +1,9 @@
 import {
   CreateRoadmapItemSchema,
-  DiscordGatewayEventSchema,
   RoadmapItemSchema,
   escapeDiscord,
   generateDiscordProjection,
   renderDiscordText,
-  type DiscordGatewayEvent,
   type RoadmapConfig,
   type RoadmapEngine,
   type RoadmapItem,
@@ -24,10 +22,9 @@ import {
   resolveAppliedTagNames,
   type TagIconPayloads,
 } from "./forums.js";
-import { reviewControls } from "./interactions.js";
 import { DiscordRestClient, safeAllowedMentions } from "./rest.js";
 
-interface DiscordMessage {
+export interface DiscordMessage {
   id: string;
   channel_id: string;
   content: string;
@@ -35,6 +32,9 @@ interface DiscordMessage {
   edited_timestamp?: string | null;
   author: { id: string; bot?: boolean };
   attachments?: DiscordReportAttachment[];
+  mentions?: Array<{ id: string }>;
+  webhook_id?: string;
+  application_id?: string;
 }
 
 interface DiscordThread {
@@ -62,6 +62,13 @@ interface DiscordEmoji {
   id: string;
   name: string;
 }
+
+interface ThreadMessageCheckpoint {
+  lastMessageId: string | null;
+  checkedAt: string;
+}
+
+const ACTIVE_THREAD_FULL_REFRESH_MS = 60 * 60 * 1_000;
 
 export class DiscordSyncService {
   private readonly rest: DiscordRestClient | null;
@@ -160,10 +167,20 @@ export class DiscordSyncService {
   }
 
   async processPendingReportJobs(limit = 2): Promise<{ processed: number; failed: number }> {
+    await this.env.DB.prepare(
+      `UPDATE discord_report_jobs
+       SET status='failed',locked_at=NULL,
+           last_error=COALESCE(last_error,'Report analysis exceeded its retry budget.')
+       WHERE status='processing' AND attempts >= 10
+         AND unixepoch(locked_at) <= unixepoch('now') - 300`,
+    ).run();
     const jobs = await this.env.DB.prepare(
       `SELECT id,thread_id,attempts FROM discord_report_jobs
-       WHERE status IN ('pending','failed')
-         AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE attempts < 10 AND (
+         (status IN ('pending','failed')
+           AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+       )
        ORDER BY id LIMIT ?`,
     )
       .bind(Math.min(Math.max(limit, 1), 10))
@@ -174,7 +191,10 @@ export class DiscordSyncService {
       const locked = await this.env.DB.prepare(
         `UPDATE discord_report_jobs
          SET status='processing',locked_at=datetime('now'),attempts=attempts+1
-         WHERE id=? AND status IN ('pending','failed')`,
+         WHERE id=? AND attempts < 10 AND (
+           status IN ('pending','failed')
+           OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+         )`,
       )
         .bind(job.id)
         .run();
@@ -183,11 +203,24 @@ export class DiscordSyncService {
         const result = await this.processReportJob(job.thread_id);
         await this.env.DB.prepare(
           `UPDATE discord_report_jobs
-           SET status='complete',analysis_json=?,linked_item_id=?,completed_at=datetime('now'),
+           SET status=IIF(rerun_requested=1,'pending','complete'),
+               rerun_requested=0,analysis_json=?,
+               linked_item_id=IIF(?=1,?,linked_item_id),
+               completed_at=IIF(rerun_requested=1,NULL,datetime('now')),
+               available_at=IIF(
+                 rerun_requested=1,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+                 available_at
+               ),
                locked_at=NULL,last_error=NULL
            WHERE id=?`,
         )
-          .bind(JSON.stringify(result.analysis), result.itemId, job.id)
+          .bind(
+            JSON.stringify(result.analysis),
+            result.updateManagedItemId ? 1 : 0,
+            result.itemId,
+            job.id,
+          )
           .run();
         processed += 1;
       } catch (error) {
@@ -224,7 +257,7 @@ export class DiscordSyncService {
       );
       const stateKey = `thread_status:${thread.threadId}`;
       const previousStatus = await this.getState(stateKey);
-      if (previousStatus && previousStatus !== item.status && item.status !== "inbox") {
+      if (previousStatus && previousStatus !== item.status) {
         const completion =
           item.status === "done"
             ? thread.kind === "bug_report"
@@ -248,41 +281,9 @@ export class DiscordSyncService {
     }
   }
 
-  async processEvent(raw: unknown): Promise<{ duplicate: boolean; eventType: string }> {
-    const event = DiscordGatewayEventSchema.parse(raw);
-    const payloadHash = await sha256(JSON.stringify(event.data));
-    try {
-      await this.env.DB.prepare(
-        `INSERT INTO discord_events(
-          event_id,sequence,event_type,payload_hash,status,received_at
-        ) VALUES(?,?,?,?,?,?)`,
-      )
-        .bind(event.eventId, event.sequence, event.type, payloadHash, "received", event.occurredAt)
-        .run();
-    } catch {
-      return { duplicate: true, eventType: event.type };
-    }
-    try {
-      await this.applyEvent(event);
-      await this.env.DB.prepare(
-        `UPDATE discord_events SET status='processed', processed_at=? WHERE event_id=?`,
-      )
-        .bind(new Date().toISOString(), event.eventId)
-        .run();
-      if (event.sequence !== null) await this.setState("gateway_sequence", String(event.sequence));
-      return { duplicate: false, eventType: event.type };
-    } catch (error) {
-      await this.env.DB.prepare(
-        `UPDATE discord_events SET status='failed', error=?, processed_at=? WHERE event_id=?`,
-      )
-        .bind(redactError(error).slice(0, 2_000), new Date().toISOString(), event.eventId)
-        .run();
-      throw error;
-    }
-  }
-
   async reconcile(): Promise<{ threads: number; messages: number; errors: string[] }> {
     const rest = this.requireRest();
+    const botUserId = await this.discordBotUserId();
     const guildId = this.config.discord.guildId;
     if (!guildId) throw new Error("discord.guildId is not configured.");
     const forumIds = [
@@ -312,18 +313,26 @@ export class DiscordSyncService {
     for (const thread of unique) {
       try {
         await this.upsertThread(thread);
+        // Queue a new report before crawling its message history so discovery
+        // does not depend on a complete history scan.
+        await this.ensureReportAutomation(thread);
+        if (!(await this.shouldFetchThreadMessages(thread))) continue;
+        let reportChanged = false;
         let before: string | undefined;
         for (;;) {
           const query = before ? `?limit=100&before=${before}` : "?limit=100";
           const messages = await rest.get<DiscordMessage[]>(
             `/channels/${thread.id}/messages${query}`,
           );
-          for (const message of messages) await this.upsertMessage(message);
+          for (const message of messages) {
+            if (await this.upsertMessage(message, botUserId)) reportChanged = true;
+          }
           messageCount += messages.length;
           if (messages.length < 100) break;
           before = messages.at(-1)?.id;
         }
-        await this.ensureReportAutomation(thread);
+        if (reportChanged) await this.enqueueReportAnalysis(thread.id, true);
+        await this.setThreadMessageCheckpoint(thread);
       } catch (error) {
         errors.push(`${thread.id}: ${redactError(error)}`);
       }
@@ -335,8 +344,11 @@ export class DiscordSyncService {
   async processPendingJobs(limit = 20): Promise<{ processed: number; failed: number }> {
     const jobs = await this.env.DB.prepare(
       `SELECT id,kind,item_id,attempts FROM sync_jobs
-       WHERE status IN ('pending','failed')
-         AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+       WHERE attempts < 10 AND (
+         (status IN ('pending','failed')
+           AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+       )
        ORDER BY id LIMIT ?`,
     )
       .bind(limit)
@@ -346,7 +358,10 @@ export class DiscordSyncService {
     for (const job of jobs.results) {
       const locked = await this.env.DB.prepare(
         `UPDATE sync_jobs SET status='processing', locked_at=datetime('now'), attempts=attempts+1
-         WHERE id=? AND status IN ('pending','failed')`,
+         WHERE id=? AND attempts < 10 AND (
+           status IN ('pending','failed')
+           OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+         )`,
       )
         .bind(job.id)
         .run();
@@ -356,7 +371,8 @@ export class DiscordSyncService {
         else if (job.kind === "sync_item" && job.item_id) await this.syncItem(job.item_id);
         else if (job.kind === "reconcile") await this.reconcile();
         await this.env.DB.prepare(
-          `UPDATE sync_jobs SET status='complete', completed_at=datetime('now'), last_error=NULL
+          `UPDATE sync_jobs SET status='complete', completed_at=datetime('now'),
+             locked_at=NULL,last_error=NULL
            WHERE id=?`,
         )
           .bind(job.id)
@@ -374,53 +390,6 @@ export class DiscordSyncService {
       }
     }
     return { processed, failed };
-  }
-
-  private async applyEvent(event: DiscordGatewayEvent): Promise<void> {
-    const data = event.data as Record<string, any>;
-    switch (event.type) {
-      case "THREAD_CREATE":
-        await this.upsertThread(data as DiscordThread);
-        await this.ensureReportAutomation(data as DiscordThread);
-        return;
-      case "THREAD_UPDATE":
-        await this.upsertThread(data as DiscordThread);
-        return;
-      case "THREAD_DELETE":
-        await this.env.DB.prepare(
-          `UPDATE discord_submissions SET archived=1, updated_at=? WHERE thread_id=?`,
-        )
-          .bind(event.occurredAt, String(data.id))
-          .run();
-        return;
-      case "MESSAGE_CREATE":
-      case "MESSAGE_UPDATE":
-        if (await this.upsertMessage(data as DiscordMessage)) {
-          await this.enqueueReportAnalysis(String(data.channel_id), true);
-        }
-        return;
-      case "MESSAGE_DELETE":
-        await this.env.DB.prepare(
-          `UPDATE discord_messages SET deleted_at=?, updated_at=? WHERE message_id=?`,
-        )
-          .bind(event.occurredAt, event.occurredAt, String(data.id))
-          .run();
-        return;
-      case "MESSAGE_REACTION_ADD":
-        await this.upsertReaction(data, event.occurredAt);
-        return;
-      case "MESSAGE_REACTION_REMOVE":
-        await this.removeReaction(data);
-        return;
-      case "MESSAGE_REACTION_REMOVE_ALL":
-        await this.env.DB.prepare("DELETE FROM discord_reactions WHERE message_id=?")
-          .bind(String(data.message_id))
-          .run();
-        await this.refreshCommunityCount(String(data.channel_id));
-        return;
-      case "THREAD_LIST_SYNC":
-        return;
-    }
   }
 
   private async upsertThread(thread: DiscordThread): Promise<void> {
@@ -461,7 +430,7 @@ export class DiscordSyncService {
       .run();
   }
 
-  private async upsertMessage(message: DiscordMessage): Promise<boolean> {
+  private async upsertMessage(message: DiscordMessage, botUserId: string | null): Promise<boolean> {
     let submission = await this.env.DB.prepare(
       "SELECT thread_id, starter_message_id FROM discord_submissions WHERE thread_id=?",
     )
@@ -479,6 +448,26 @@ export class DiscordSyncService {
     if (!submission) return false;
     const content = sanitizeText(message.content ?? "", 40_000);
     const attachments = Array.isArray(message.attachments) ? message.attachments : [];
+    const attachmentsJson = JSON.stringify(attachments);
+    const updatedAt = message.edited_timestamp ?? message.timestamp;
+    const existing = await this.env.DB.prepare(
+      `SELECT content,attachments_json,updated_at,deleted_at
+       FROM discord_messages WHERE message_id=?`,
+    )
+      .bind(message.id)
+      .first<{
+        content: string;
+        attachments_json: string;
+        updated_at: string;
+        deleted_at: string | null;
+      }>();
+    const changed =
+      !existing ||
+      existing.content !== content ||
+      attachmentContentFingerprint(parseAttachments(existing.attachments_json)) !==
+        attachmentContentFingerprint(attachments) ||
+      existing.updated_at !== updatedAt ||
+      existing.deleted_at !== null;
     await this.env.DB.prepare(
       `INSERT INTO discord_messages(
         message_id,thread_id,author_id,content,attachments_json,created_at,updated_at
@@ -494,12 +483,14 @@ export class DiscordSyncService {
         message.channel_id,
         message.author.id,
         content,
-        JSON.stringify(attachments),
+        attachmentsJson,
         message.timestamp,
-        message.edited_timestamp ?? message.timestamp,
+        updatedAt,
       )
       .run();
-    if (message.id === submission.starter_message_id || message.id === message.channel_id) {
+    const isStarter =
+      message.id === submission.starter_message_id || message.id === message.channel_id;
+    if (isStarter) {
       await this.env.DB.prepare(
         `UPDATE discord_submissions
          SET content=?, attachments_json=?, structured_metadata_json=?, updated_at=?
@@ -507,15 +498,18 @@ export class DiscordSyncService {
       )
         .bind(
           content,
-          JSON.stringify(attachments),
+          attachmentsJson,
           JSON.stringify(extractBugMetadata(content)),
-          message.edited_timestamp ?? message.timestamp,
+          updatedAt,
           message.channel_id,
         )
         .run();
-      return true;
     }
-    return false;
+    const isUserAuthored = isUserAuthoredDiscordMessage(message, botUserId);
+    const isEvidence = isStarter || messageMentionsUser(message, botUserId);
+    const wasEvidence =
+      isStarter || Boolean(existing && contentMentionsUser(existing.content, botUserId));
+    return isUserAuthored && changed && (isEvidence || wasEvidence);
   }
 
   private async upsertReaction(data: Record<string, any>, occurredAt: string): Promise<void> {
@@ -569,38 +563,19 @@ export class DiscordSyncService {
     });
   }
 
-  private async postReviewControls(thread: DiscordThread): Promise<void> {
-    if (!this.rest) return;
-    const isConfiguredForum =
-      thread.parent_id === this.config.discord.featureRequestsForumId ||
-      thread.parent_id === this.config.discord.bugReportsForumId;
-    if (!isConfiguredForum) return;
-    const key = `review_controls:${thread.id}`;
-    if (await this.getState(key)) return;
-    await this.rest.post(
-      `/channels/${thread.id}/messages`,
-      {
-        content:
-          "I’m scanning this submission and its attachments now. It will be created in the roadmap **Inbox** for maintainer review, with classification and priority tags corrected when needed.",
-        components: reviewControls(thread.id, this.config),
-        allowed_mentions: safeAllowedMentions(),
-      },
-      key,
-    );
-    await this.setState(key, new Date().toISOString());
-  }
-
   private async processReportJob(threadId: string): Promise<{
     itemId: string;
     analysis: unknown;
+    updateManagedItemId: boolean;
   }> {
     const rest = this.requireRest();
     let submission = await this.env.DB.prepare(
       `SELECT thread_id,forum_id,guild_id,kind,title,starter_message_id,content,
-              attachments_json,linked_item_id
+              attachments_json,linked_item_id,
+              (SELECT linked_item_id FROM discord_report_jobs WHERE thread_id=?) AS managed_item_id
        FROM discord_submissions WHERE thread_id=?`,
     )
-      .bind(threadId)
+      .bind(threadId, threadId)
       .first<{
         thread_id: string;
         forum_id: string;
@@ -611,121 +586,220 @@ export class DiscordSyncService {
         content: string;
         attachments_json: string;
         linked_item_id: string | null;
+        managed_item_id: string | null;
       }>();
     if (!submission) throw new Error(`Discord submission ${threadId} was not found.`);
-    if (submission.linked_item_id) {
+    if (submission.linked_item_id && submission.linked_item_id !== submission.managed_item_id) {
       const item = await this.engine.get(submission.linked_item_id);
       await this.syncItem(item.id);
-      return { itemId: item.id, analysis: { replayed: true } };
+      return { itemId: item.id, analysis: { managed: false }, updateManagedItemId: false };
     }
+    const botUserId = await this.discordBotUserId();
     const thread = await rest.get<DiscordThread>(`/channels/${threadId}`);
     if (!submission.content && submission.starter_message_id) {
       const starter = await rest.get<DiscordMessage>(
         `/channels/${threadId}/messages/${submission.starter_message_id}`,
       );
-      await this.upsertMessage(starter);
+      await this.upsertMessage(starter, botUserId);
       submission = (await this.env.DB.prepare(
         `SELECT thread_id,forum_id,guild_id,kind,title,starter_message_id,content,
-                attachments_json,linked_item_id
+                attachments_json,linked_item_id,
+                (SELECT linked_item_id FROM discord_report_jobs WHERE thread_id=?) AS managed_item_id
          FROM discord_submissions WHERE thread_id=?`,
       )
-        .bind(threadId)
+        .bind(threadId, threadId)
         .first()) as typeof submission;
     }
     const threadMessages = await this.fetchThreadMessages(threadId);
-    const attachments = threadMessages
-      .filter((message) => !message.author.bot)
-      .flatMap((message) => message.attachments ?? [])
+    const evidenceMessages = threadMessages.filter((message) =>
+      isReportEvidenceMessage(message, submission.starter_message_id, botUserId),
+    );
+    const attachments = evidenceMessages
+      .flatMap((message) =>
+        (message.attachments ?? []).map((attachment) => ({
+          ...attachment,
+          evidence_message_id: message.id,
+        })),
+      )
       .slice(0, 20);
     const reportAttachments = attachments.length
       ? attachments
-      : parseAttachments(submission.attachments_json);
+      : parseAttachments(submission.attachments_json).map((attachment) => ({
+          ...attachment,
+          evidence_message_id: submission.starter_message_id ?? threadId,
+        }));
+    const reportContent = combineUserReportText(
+      evidenceMessages,
+      submission.starter_message_id,
+      submission.content || submission.title,
+      botUserId,
+    );
     const selectedTags = await resolveAppliedTagNames(rest, thread);
-    const analysis = await analyzeDiscordReport(this.env, this.config, {
+    const analyzed = await analyzeDiscordReport(this.env, this.config, {
       kind: submission.kind,
       title: submission.title,
-      content: combineUserReportText(
-        threadMessages,
-        submission.starter_message_id,
-        submission.content || submission.title,
-      ),
+      content: reportContent,
       selectedTags,
       attachments: reportAttachments,
     });
-    const threadUrl = `https://discord.com/channels/${submission.guild_id}/${threadId}`;
-    const created = await this.engine.create(
-      CreateRoadmapItemSchema.parse({
-        title: analysis.title,
-        description: analysis.description,
-        type: submission.kind === "bug_report" ? "bug" : "feature",
-        labels: [analysis.classification],
-        area: analysis.area,
-        status: "planned",
-        priority: analysis.priority,
-        difficulty: analysis.difficulty,
-        confidence: analysis.confidence,
-        proposedImplementation: analysis.proposedImplementation,
-        affectedComponents: analysis.affectedComponents,
-        risks: analysis.risks,
-        requiredResearch: analysis.requiredResearch,
-        references: [
-          { kind: "research", label: "Discord forum submission", url: threadUrl },
-          ...attachmentReferences(reportAttachments),
-        ],
-        acceptanceCriteria: buildAcceptanceCriteria(analysis.acceptanceCriteria),
-        linkedDiscordThreads: [
-          {
-            threadId,
-            forumId: submission.forum_id,
-            guildId: submission.guild_id,
-            kind: submission.kind,
-            url: threadUrl,
-            title: submission.title,
-            linkedAt: new Date().toISOString(),
-          },
-        ],
-      }),
-      {
-        actor: {
-          id: "discord-report-analyzer",
-          displayName: "Discord report analyzer",
-          kind: "system",
-        },
-        mutationId: `discord-report:${threadId}`,
-      },
+    const eligibleFollowUpIds = new Set(
+      evidenceMessages
+        .filter((message) => message.id !== submission.starter_message_id)
+        .map((message) => message.id),
     );
+    const relevantFollowUpMessageIds = [
+      ...new Set(
+        analyzed.relevantFollowUpMessageIds.filter((messageId) =>
+          eligibleFollowUpIds.has(messageId),
+        ),
+      ),
+    ].sort();
+    const relevantIds = new Set(relevantFollowUpMessageIds);
+    const relevantMessages = evidenceMessages.filter(
+      (message) => message.id === submission.starter_message_id || relevantIds.has(message.id),
+    );
+    const relevantAttachments = reportAttachments.filter(
+      (attachment) =>
+        !attachment.evidence_message_id ||
+        attachment.evidence_message_id === submission.starter_message_id ||
+        relevantIds.has(attachment.evidence_message_id),
+    );
+    const relevantContent = combineUserReportText(
+      relevantMessages,
+      submission.starter_message_id,
+      submission.content || submission.title,
+      botUserId,
+    );
+    const sourceRevision = await discordReportSourceRevision({
+      kind: submission.kind,
+      title: submission.title,
+      content: relevantContent,
+      attachments: relevantAttachments,
+    });
+    const mutationId = `discord-report:${threadId}:${sourceRevision}`;
+    const replay = await this.env.DB.prepare(
+      "SELECT item_id FROM audit_history WHERE mutation_id=?",
+    )
+      .bind(mutationId)
+      .first<{ item_id: string }>();
+    if (replay) {
+      const item = await this.engine.get(replay.item_id);
+      await this.env.DB.prepare(
+        `UPDATE discord_submissions
+         SET linked_item_id=?,review_state='linked',updated_at=?
+         WHERE thread_id=?`,
+      )
+        .bind(item.id, new Date().toISOString(), threadId)
+        .run();
+      await this.syncItem(item.id);
+      return {
+        itemId: item.id,
+        analysis: { replayed: true, sourceRevision, relevantFollowUpMessageIds },
+        updateManagedItemId: true,
+      };
+    }
+    const analysis = { ...analyzed, relevantFollowUpMessageIds };
+    const threadUrl = `https://discord.com/channels/${submission.guild_id}/${threadId}`;
+    const threadLink = {
+      threadId,
+      forumId: submission.forum_id,
+      guildId: submission.guild_id,
+      kind: submission.kind,
+      url: threadUrl,
+      title: submission.title,
+      linkedAt: new Date().toISOString(),
+    };
+    const analysisFields = {
+      title: analysis.title,
+      description: analysis.description,
+      type: submission.kind === "bug_report" ? ("bug" as const) : ("feature" as const),
+      labels: [analysis.classification],
+      area: analysis.area,
+      priority: analysis.priority,
+      difficulty: analysis.difficulty,
+      confidence: analysis.confidence,
+      proposedImplementation: analysis.proposedImplementation,
+      affectedComponents: analysis.affectedComponents,
+      risks: analysis.risks,
+      requiredResearch: analysis.requiredResearch,
+      references: [
+        { kind: "research" as const, label: "Discord forum submission", url: threadUrl },
+        ...attachmentReferences(relevantAttachments),
+      ],
+      acceptanceCriteria: buildAcceptanceCriteria(analysis.acceptanceCriteria),
+    };
+    const actor = {
+      id: "discord-report-analyzer",
+      displayName: "Discord report analyzer",
+      kind: "system" as const,
+    };
+    const result = submission.linked_item_id
+      ? await (async () => {
+          const item = await this.engine.get(submission.linked_item_id!);
+          return this.engine.update(
+            item.id,
+            {
+              ...analysisFields,
+              linkedDiscordThreads: [
+                ...item.linkedDiscordThreads.filter((link) => link.threadId !== threadId),
+                threadLink,
+              ],
+            },
+            item.revision,
+            {
+              actor,
+              mutationId,
+            },
+          );
+        })()
+      : await this.engine.create(
+          CreateRoadmapItemSchema.parse({
+            ...analysisFields,
+            status: "planned",
+            linkedDiscordThreads: [threadLink],
+          }),
+          {
+            actor,
+            mutationId,
+          },
+        );
     await this.env.DB.prepare(
       `UPDATE discord_submissions
        SET linked_item_id=?,review_state='linked',updated_at=?
        WHERE thread_id=?`,
     )
-      .bind(created.after.id, new Date().toISOString(), threadId)
+      .bind(result.after.id, new Date().toISOString(), threadId)
       .run();
-    await this.syncItem(created.after.id);
-    await rest.post(
-      `/channels/${threadId}/messages`,
-      {
-        content: reportCreatedContent(
-          created.after.id,
-          analysis,
-          this.priorityLabel(analysis.priority),
-        ),
-        allowed_mentions: safeAllowedMentions(),
-      },
-      `report-analysis:${threadId}`,
-    );
-    return { itemId: created.after.id, analysis };
+    await this.syncItem(result.after.id);
+    if (!result.replayed) {
+      await rest.post(
+        `/channels/${threadId}/messages`,
+        {
+          content: submission.linked_item_id
+            ? `**Roadmap analysis updated — ${escapeDiscord(result.after.id)}**\nThe latest report edits and follow-up messages have been incorporated.`
+            : reportCreatedContent(
+                result.after.id,
+                analysis,
+                this.priorityLabel(analysis.priority),
+              ),
+          allowed_mentions: safeAllowedMentions(),
+        },
+        `report-analysis:${threadId}:${sourceRevision}`,
+      );
+    }
+    return { itemId: result.after.id, analysis, updateManagedItemId: true };
   }
 
   private async fetchThreadMessages(threadId: string): Promise<DiscordMessage[]> {
     const rest = this.requireRest();
+    const botUserId = await this.discordBotUserId();
     const messages: DiscordMessage[] = [];
     let before: string | undefined;
     for (;;) {
       const query = before ? `?limit=100&before=${before}` : "?limit=100";
       const page = await rest.get<DiscordMessage[]>(`/channels/${threadId}/messages${query}`);
       messages.push(...page);
-      for (const message of page) await this.upsertMessage(message);
+      for (const message of page) await this.upsertMessage(message, botUserId);
       if (page.length < 100) break;
       before = page.at(-1)?.id;
       if (!before) break;
@@ -738,24 +812,31 @@ export class DiscordSyncService {
       `INSERT INTO discord_report_jobs(thread_id,status)
        VALUES(?,'pending')
        ON CONFLICT(thread_id) DO UPDATE SET
-         status=IIF(status IN ('complete','processing'),status,'pending'),
+         status=IIF(status='processing',status,'pending'),
+         rerun_requested=IIF(status='processing',1,rerun_requested),
+         attempts=IIF(status='processing',attempts,0),
+         completed_at=IIF(status='complete',NULL,completed_at),
          available_at=IIF(
-           status IN ('complete','processing'),
+           status='processing',
            available_at,
            strftime('%Y-%m-%dT%H:%M:%fZ','now')
          ),
-         locked_at=IIF(status IN ('complete','processing'),locked_at,NULL),
-         last_error=IIF(status IN ('complete','processing'),last_error,NULL)`,
+         locked_at=IIF(status='processing',locked_at,NULL),
+         last_error=IIF(status='processing',last_error,NULL)`,
     )
       .bind(threadId)
       .run();
     if (ready) {
       await this.env.DB.prepare(
         `UPDATE discord_report_jobs
-         SET status='pending',
+         SET status=IIF(status='processing',status,'pending'),
+             rerun_requested=IIF(status='processing',1,rerun_requested),
+             attempts=IIF(status='processing',attempts,0),
+             completed_at=IIF(status='complete',NULL,completed_at),
              available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-             locked_at=NULL
-         WHERE thread_id=? AND status NOT IN ('complete','processing')`,
+             locked_at=IIF(status='processing',locked_at,NULL),
+             last_error=IIF(status='processing',last_error,NULL)
+         WHERE thread_id=?`,
       )
         .bind(threadId)
         .run();
@@ -764,35 +845,58 @@ export class DiscordSyncService {
 
   private async ensureReportAutomation(thread: DiscordThread): Promise<void> {
     const submission = await this.env.DB.prepare(
-      `SELECT review_state,linked_item_id
-       FROM discord_submissions WHERE thread_id=?`,
+      `SELECT s.review_state,s.linked_item_id,j.id AS job_id
+       FROM discord_submissions s
+       LEFT JOIN discord_report_jobs j ON j.thread_id=s.thread_id
+       WHERE s.thread_id=?`,
     )
       .bind(thread.id)
-      .first<{ review_state: string; linked_item_id: string | null }>();
+      .first<{ review_state: string; linked_item_id: string | null; job_id: number | null }>();
     if (!submission || submission.review_state !== "inbox" || submission.linked_item_id) {
       return;
     }
 
-    await this.enqueueReportAnalysis(thread.id, true);
-    if (!(await this.getState(`review_controls:${thread.id}`))) {
-      await this.applyInitialInboxTag(thread);
-      await this.postReviewControls(thread);
+    // Reconciliation runs frequently. An existing job is already the durable
+    // record of work and must not be marked for a rerun merely because the
+    // submission is still awaiting its first completed analysis.
+    if (submission.job_id == null) {
+      await this.enqueueReportAnalysis(thread.id, true);
     }
   }
 
-  private async applyInitialInboxTag(thread: DiscordThread): Promise<void> {
-    const rest = this.requireRest();
-    const inboxTag =
-      this.config.discord.statusTagMappings[`${thread.parent_id}:inbox`] ??
-      this.config.discord.statusTagMappings.inbox;
-    if (!inboxTag) return;
-    const statusTags = new Set(Object.values(this.config.discord.statusTagMappings));
-    const retained = (thread.applied_tags ?? []).filter((tag) => !statusTags.has(tag));
-    await rest.patch(
-      `/channels/${thread.id}`,
-      { applied_tags: [...retained, inboxTag].slice(0, 5), archived: false, locked: false },
-      "Place new roadmap submission in Inbox",
+  private async shouldFetchThreadMessages(thread: DiscordThread): Promise<boolean> {
+    const raw = await this.getState(`thread_messages:${thread.id}`);
+    if (!raw) return true;
+    let checkpoint: ThreadMessageCheckpoint;
+    try {
+      checkpoint = JSON.parse(raw) as ThreadMessageCheckpoint;
+    } catch {
+      return true;
+    }
+    if (checkpoint.lastMessageId !== (thread.last_message_id ?? null)) return true;
+    if (thread.thread_metadata?.archived) return false;
+    const checkedAt = Date.parse(checkpoint.checkedAt);
+    return !Number.isFinite(checkedAt) || checkedAt <= Date.now() - ACTIVE_THREAD_FULL_REFRESH_MS;
+  }
+
+  private async setThreadMessageCheckpoint(thread: DiscordThread): Promise<void> {
+    await this.setState(
+      `thread_messages:${thread.id}`,
+      JSON.stringify({
+        lastMessageId: thread.last_message_id ?? null,
+        checkedAt: new Date().toISOString(),
+      } satisfies ThreadMessageCheckpoint),
     );
+  }
+
+  private async discordBotUserId(): Promise<string | null> {
+    const stored = await this.getState("discord_bot_user_id");
+    if (stored) return stored;
+    if (!this.rest) return null;
+    const bot = await this.rest.get<{ id?: string }>("/users/@me");
+    const id = typeof bot.id === "string" && bot.id ? bot.id : null;
+    if (id) await this.setState("discord_bot_user_id", id);
+    return id;
   }
 
   private async allItems(): Promise<RoadmapItem[]> {
@@ -918,20 +1022,86 @@ export function combineUserReportText(
     id: string;
     content: string;
     timestamp: string;
-    author: { bot?: boolean };
+    author: { id?: string; bot?: boolean };
+    attachments?: DiscordReportAttachment[];
+    mentions?: Array<{ id: string }>;
+    webhook_id?: string;
+    application_id?: string;
   }>,
   starterMessageId: string | null,
   fallback: string,
+  botUserId: string | null = null,
 ): string {
   const report = messages
-    .filter((message) => !message.author.bot && message.content.trim())
+    .filter(
+      (message) =>
+        isReportEvidenceMessage(message, starterMessageId, botUserId) &&
+        (message.content.trim() || (message.attachments?.length ?? 0) > 0),
+    )
     .sort((left, right) => Date.parse(left.timestamp) - Date.parse(right.timestamp))
     .map((message) => {
-      const label = message.id === starterMessageId ? "Initial report" : "Follow-up message";
-      return `${label}:\n${message.content.trim()}`;
+      const label =
+        message.id === starterMessageId
+          ? "Initial report"
+          : `Bot-mentioned follow-up evidence (message ID: ${message.id})`;
+      const attachmentNote = (message.attachments ?? []).length
+        ? `Attached files: ${(message.attachments ?? [])
+            .map((attachment) => attachment.filename ?? attachment.id ?? "attachment")
+            .join(", ")}`
+        : "";
+      return `${label}:\n${[message.content.trim(), attachmentNote].filter(Boolean).join("\n")}`;
     })
     .join("\n\n");
   return sanitizeText(report || fallback, 40_000);
+}
+
+export function isReportEvidenceMessage(
+  message: {
+    id: string;
+    content?: string;
+    author: { id?: string; bot?: boolean };
+    mentions?: Array<{ id: string }>;
+    webhook_id?: string;
+    application_id?: string;
+  },
+  starterMessageId: string | null,
+  botUserId: string | null = null,
+): boolean {
+  return (
+    isUserAuthoredDiscordMessage(message, botUserId) &&
+    (message.id === starterMessageId || messageMentionsUser(message, botUserId))
+  );
+}
+
+function messageMentionsUser(
+  message: { content?: string; mentions?: Array<{ id: string }> },
+  userId: string | null,
+): boolean {
+  if (!userId) return false;
+  return (
+    message.mentions?.some((mention) => mention.id === userId) === true ||
+    contentMentionsUser(message.content ?? "", userId)
+  );
+}
+
+function contentMentionsUser(content: string, userId: string | null): boolean {
+  return Boolean(userId && (content.includes(`<@${userId}>`) || content.includes(`<@!${userId}>`)));
+}
+
+export function isUserAuthoredDiscordMessage(
+  message: {
+    author: { id?: string; bot?: boolean };
+    webhook_id?: string;
+    application_id?: string;
+  },
+  botUserId: string | null = null,
+): boolean {
+  return (
+    message.author.bot !== true &&
+    (!botUserId || message.author.id !== botUserId) &&
+    !message.webhook_id &&
+    !message.application_id
+  );
 }
 
 export function reportCreatedContent(
@@ -989,5 +1159,53 @@ function parseAttachments(value: string): DiscordReportAttachment[] {
     return Array.isArray(parsed) ? parsed : [];
   } catch {
     return [];
+  }
+}
+
+export function attachmentContentFingerprint(attachments: DiscordReportAttachment[]): string {
+  return JSON.stringify(stableAttachmentContent(attachments));
+}
+
+export async function discordReportSourceRevision(input: {
+  kind: "feature_request" | "bug_report";
+  title: string;
+  content: string;
+  attachments: DiscordReportAttachment[];
+}): Promise<string> {
+  return (
+    await sha256(
+      JSON.stringify({
+        kind: input.kind,
+        title: input.title,
+        content: input.content,
+        attachments: stableAttachmentContent(input.attachments),
+      }),
+    )
+  ).slice(0, 24);
+}
+
+function stableAttachmentContent(attachments: DiscordReportAttachment[]) {
+  return attachments.map((attachment) => ({
+    id: attachment.id ?? null,
+    filename: attachment.filename ?? null,
+    description: attachment.description ?? null,
+    contentType: attachment.content_type ?? null,
+    size: attachment.size ?? null,
+    width: attachment.width ?? null,
+    height: attachment.height ?? null,
+    url: stableAttachmentUrl(attachment.url),
+    proxyUrl: stableAttachmentUrl(attachment.proxy_url),
+  }));
+}
+
+function stableAttachmentUrl(value?: string): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch {
+    return value.split("?")[0]!.split("#")[0]!;
   }
 }

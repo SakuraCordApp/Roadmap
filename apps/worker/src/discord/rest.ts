@@ -16,6 +16,9 @@ export class DiscordRestClient {
   ) {}
 
   async request<T>(path: string, options: DiscordRequestOptions = {}): Promise<T> {
+    const body = options.idempotencyKey
+      ? await withMessageIdempotency(options.body, options.idempotencyKey)
+      : options.body;
     let attempt = 0;
     while (attempt < 5) {
       attempt += 1;
@@ -27,13 +30,12 @@ export class DiscordRestClient {
         headers: {
           Authorization: `Bot ${this.token}`,
           "User-Agent": "SakuraCordRoadmap (https://github.com/SakuraCord/roadmap, 0.1.0)",
-          ...(options.body === undefined ? {} : { "Content-Type": "application/json" }),
+          ...(body === undefined ? {} : { "Content-Type": "application/json" }),
           ...(options.auditReason
             ? { "X-Audit-Log-Reason": encodeURIComponent(options.auditReason.slice(0, 512)) }
             : {}),
-          ...(options.idempotencyKey ? { "X-Audit-Log-Reason": options.idempotencyKey } : {}),
         },
-        ...(options.body === undefined ? {} : { body: JSON.stringify(options.body) }),
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       });
       if (response.status === 429) {
         const payload = (await response.json().catch(() => ({}))) as { retry_after?: number };
@@ -91,4 +93,27 @@ export class DiscordRestClient {
 
 export function safeAllowedMentions() {
   return { parse: [] as string[], replied_user: false };
+}
+
+async function withMessageIdempotency(
+  body: unknown,
+  key: string,
+): Promise<Record<string, unknown>> {
+  if (!body || typeof body !== "object" || Array.isArray(body)) {
+    throw new RoadmapError(
+      "DISCORD_IDEMPOTENCY_INVALID",
+      "Discord message idempotency requires an object request body.",
+      500,
+    );
+  }
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(key));
+  const nonce = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("")
+    .slice(0, 25);
+  return {
+    ...(body as Record<string, unknown>),
+    nonce,
+    enforce_nonce: true,
+  };
 }

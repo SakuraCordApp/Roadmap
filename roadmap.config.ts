@@ -48,13 +48,6 @@ const defaults = defineRoadmapConfig({
   ],
   lifecycle: [
     {
-      id: "inbox",
-      label: "Inbox",
-      color: "#94A3B8",
-      transitionsTo: ["planned", "declined", "duplicate"],
-      publicSection: false,
-    },
-    {
       id: "planned",
       label: "Planned",
       color: "#60A5FA",
@@ -77,14 +70,14 @@ const defaults = defineRoadmapConfig({
       label: "Declined",
       color: "#F87171",
       terminal: true,
-      transitionsTo: ["inbox", "planned"],
+      transitionsTo: ["planned"],
     },
     {
       id: "duplicate",
       label: "Duplicate",
       color: "#F59E0B",
       terminal: true,
-      transitionsTo: ["inbox"],
+      transitionsTo: ["planned"],
     },
     {
       id: "done",
@@ -136,7 +129,7 @@ const defaults = defineRoadmapConfig({
     provider: "cloudflare",
     workerName: "sakuracord-roadmap",
     d1DatabaseName: "sakuracord-roadmap",
-    gatewayProvider: "node",
+    gatewayProvider: "cloudflare",
   },
 });
 

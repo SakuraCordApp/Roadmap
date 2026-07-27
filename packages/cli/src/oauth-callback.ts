@@ -84,6 +84,7 @@ export async function startLocalOAuthCallbackServer(): Promise<LocalOAuthCallbac
     throw new Error(
       `ChatGPT sign-in needs local port 1455, but it could not be opened (${detail}). ` +
         "Close any other Codex sign-in window or process using port 1455, then rerun the command.",
+      { cause: error },
     );
   }
 

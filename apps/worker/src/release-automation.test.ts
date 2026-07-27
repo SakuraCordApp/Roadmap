@@ -44,6 +44,7 @@ describe("release automation", () => {
       "0001_initial.sql",
       "0002_release_automation.sql",
       "0003_report_automation.sql",
+      "0004_reliable_jobs.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration

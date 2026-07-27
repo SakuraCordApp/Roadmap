@@ -37,9 +37,7 @@ program
   .option("--application-repository <path>")
   .option("--public-url <url>")
   .option("--id-prefix <prefix>")
-  .addOption(
-    new Option("--gateway-provider <provider>").choices(["cloudflare", "node", "disabled"]),
-  )
+  .addOption(new Option("--gateway-provider <provider>").choices(["cloudflare", "disabled"]))
   .option("--skip-cloudflare")
   .option("--skip-discord")
   .option("--skip-codex")

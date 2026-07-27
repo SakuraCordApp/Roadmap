@@ -12,15 +12,7 @@ import {
 import { resilientFetch } from "./network.js";
 
 const DISCORD_API = "https://discord.com/api/v10";
-const REQUIRED_TAGS = [
-  "Inbox",
-  "Planned",
-  "In Progress",
-  "Polishing",
-  "Done",
-  "Declined",
-  "Duplicate",
-];
+const REQUIRED_TAGS = ["Planned", "In Progress", "Polishing", "Done", "Declined", "Duplicate"];
 
 export interface DiscordOptions {
   botToken?: string;

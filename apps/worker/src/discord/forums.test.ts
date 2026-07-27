@@ -64,10 +64,9 @@ describe("Discord forum taxonomy", () => {
 
     expect(result).toHaveLength(2);
     for (const forum of result) {
-      expect(forum.tags).toHaveLength(13);
+      expect(forum.tags).toHaveLength(12);
       expect(forum.tags.map((tag) => tag.name)).not.toContain("Fixed");
       expect(forum.tags.filter((tag) => tag.moderated).map((tag) => tag.name)).toEqual([
-        "Inbox",
         "Planned",
         "In Progress",
         "Polishing",
@@ -84,9 +83,9 @@ describe("Discord forum taxonomy", () => {
         "Low",
       ]);
       expect(forum.tags.every((tag) => Boolean(tag.emojiId))).toBe(true);
-      expect(forum.tags.find((tag) => tag.name === "Inbox")?.id).toBe(`${forum.forumId}-inbox`);
+      expect(forum.tags.map((tag) => tag.name)).not.toContain("Inbox");
     }
-    expect((rest.post as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(13);
+    expect((rest.post as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(12);
   });
 
   it("replaces managed tags with the canonical classification, priority, and status", async () => {

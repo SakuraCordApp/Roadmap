@@ -33,18 +33,17 @@ single-use.
 - Discord interaction bodies use Ed25519 verification over timestamp plus raw
   body.
 - Interaction timestamps older than five minutes are rejected.
-- Interaction IDs are replay-protected in D1.
+- Interaction IDs are durably queued in D1 before deferred processing.
 - GitHub webhook bodies use `X-Hub-Signature-256` HMAC verification and
   delivery IDs are replay-protected for 30 days.
-- The optional real-time DiscordBot Node provider uses HMAC-SHA256 over
-  timestamp, nonce, and raw body.
-- Node Gateway timestamps and nonces are replay-protected.
 - Mutation requests require durable idempotency keys.
-- Public and mutation rate windows are D1-backed.
+- Public and mutation limits use Cloudflare rate-limit bindings with a D1
+  fallback for local development.
 - CORS uses an exact configured allowlist and never enables credentials.
 - CSRF is not applicable to bearer-only APIs; cookie-bearing mutation requests
   are rejected as defense in depth.
-- Security headers are added by Hono middleware.
+- Security headers are added by Hono middleware and the static asset `_headers`
+  policy.
 
 ## Untrusted Discord content
 

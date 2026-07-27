@@ -32,7 +32,7 @@ interface SetupOptions {
   applicationRepository?: string;
   publicUrl?: string;
   idPrefix?: string;
-  gatewayProvider?: "cloudflare" | "node" | "disabled";
+  gatewayProvider?: "cloudflare" | "disabled";
   skipCloudflare?: boolean;
   skipDiscord?: boolean;
   skipCodex?: boolean;
@@ -77,7 +77,7 @@ interface SetupAnswers {
   applicationRepository: string;
   publicUrl: string;
   idPrefix: string;
-  gatewayProvider: "cloudflare" | "node" | "disabled";
+  gatewayProvider: "cloudflare" | "disabled";
   initialData: "empty" | "file";
   importFile?: string;
   mcpMode: "local" | "remote";
@@ -599,7 +599,7 @@ async function gatherAnswers(
       options.gatewayProvider ??
       saved.gatewayProvider ??
       instance.deployment?.gatewayProvider ??
-      "node",
+      "cloudflare",
     initialData: options.initialData ?? saved.initialData ?? "empty",
     ...((options.importFile ?? saved.importFile)
       ? { importFile: options.importFile ?? saved.importFile }
@@ -803,19 +803,13 @@ async function gatherAnswers(
       name: "gatewayProvider",
       message: "Discord Gateway provider",
       choices: [
-        { title: "Self-hosted Node worker (portable default)", value: "node" },
         {
           title: "Cloudflare scheduled reconciliation",
           value: "cloudflare",
         },
         { title: "Disabled", value: "disabled" },
       ],
-      initial:
-        defaults.gatewayProvider === "cloudflare"
-          ? 1
-          : defaults.gatewayProvider === "disabled"
-            ? 2
-            : 0,
+      initial: defaults.gatewayProvider === "disabled" ? 1 : 0,
     },
     {
       type: "confirm",
@@ -993,7 +987,7 @@ async function configureCloudflare(
   repair = false,
 ): Promise<{ adminToken?: string }> {
   const migrationsCurrent =
-    stepComplete(state, "d1_migrations") && state.d1_migrations?.detail.includes("schema 3");
+    stepComplete(state, "d1_migrations") && state.d1_migrations?.detail.includes("schema 4");
   if (stepComplete(state, "cloudflare_deploy") && migrationsCurrent && !repair) {
     output(context, "✓ Resuming after completed Cloudflare deployment");
     return {};
@@ -1127,7 +1121,7 @@ async function configureCloudflare(
       context,
       "d1_migrations",
       "complete",
-      "Remote migrations applied through schema 3",
+      "Remote migrations applied through schema 4",
     );
   } else {
     output(context, "✓ Skipping already-applied D1 migrations");
@@ -1138,7 +1132,6 @@ async function configureCloudflare(
     const secretAnswers = nonInteractive
       ? {
           admin: process.env.ROADMAP_ADMIN_TOKEN,
-          gateway: process.env.ROADMAP_GATEWAY_INGEST_SECRET,
         }
       : await prompts([
           {
@@ -1146,17 +1139,10 @@ async function configureCloudflare(
             name: "admin",
             message: "Bootstrap maintainer token (leave blank to generate)",
           },
-          {
-            type: "password",
-            name: "gateway",
-            message: "Gateway ingest secret (leave blank to generate)",
-          },
         ]);
     const configuredAdminToken = secretAnswers.admin || randomBytes(32).toString("base64url");
     adminToken = configuredAdminToken;
-    const gatewaySecret = secretAnswers.gateway || randomBytes(32).toString("base64url");
     await putSecret(context, "ROADMAP_ADMIN_TOKEN", configuredAdminToken);
-    await putSecret(context, "ROADMAP_GATEWAY_INGEST_SECRET", gatewaySecret);
     const keychainStored = await storeMaintainerToken(context, answers.slug, configuredAdminToken);
     await markStep(
       context,
@@ -1173,9 +1159,6 @@ async function configureCloudflare(
         `Save the generated maintainer token in your password manager now: ${adminToken}\n`,
       );
     }
-    process.stdout.write(
-      `Save the Gateway ingest secret in your password manager now: ${gatewaySecret}\n`,
-    );
   } else {
     output(context, "✓ Reusing secrets already stored by Cloudflare");
   }
@@ -1375,11 +1358,6 @@ export async function finishDiscordRuntime(
         ? `Cloudflare Gateway connected with session ${status.sessionId}`
         : `Cloudflare Discord synchronization healthy through ${status.provider}`,
     );
-  } else if (answers.gatewayProvider === "node") {
-    output(
-      context,
-      "The Node Gateway is configured in https://github.com/SakuraCordApp/DiscordBot. Clone that repository and run its built Node provider under a supervised host using the saved secrets.",
-    );
   }
 }
 
@@ -1461,7 +1439,7 @@ function completedStepNames(state: SetupState): string[] {
 function planEntryComplete(state: SetupState, target: string): boolean {
   if (target === "Cloudflare D1 schema") {
     return Boolean(
-      stepComplete(state, "d1_migrations") && state.d1_migrations?.detail.includes("schema 3"),
+      stepComplete(state, "d1_migrations") && state.d1_migrations?.detail.includes("schema 4"),
     );
   }
   if (target === "GitHub release webhook, encrypted ChatGPT OAuth, and Discord announcements") {
@@ -1701,7 +1679,6 @@ function renderPlan(
 
 const palette = ["#F3A6C8", "#D9578B", "#60A5FA", "#34D399", "#F59E0B", "#F87171", "#94A3B8"];
 const DEFAULT_LIFECYCLE_IDS = [
-  "inbox",
   "planned",
   "in_progress",
   "polishing",
@@ -1709,15 +1686,7 @@ const DEFAULT_LIFECYCLE_IDS = [
   "duplicate",
   "done",
 ];
-const DEFAULT_LIFECYCLE_COLORS = [
-  "#94A3B8",
-  "#60A5FA",
-  "#A78BFA",
-  "#F3A6C8",
-  "#F87171",
-  "#F59E0B",
-  "#34D399",
-];
+const DEFAULT_LIFECYCLE_COLORS = ["#60A5FA", "#A78BFA", "#F3A6C8", "#F87171", "#F59E0B", "#34D399"];
 const DEFAULT_PRIORITY_IDS = ["critical", "high", "medium", "low"];
 const DEFAULT_PRIORITY_COLORS = ["#EF4444", "#F97316", "#EAB308", "#22C55E"];
 

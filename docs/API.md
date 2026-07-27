@@ -142,9 +142,6 @@ Each body includes `expectedRevision`.
 - `GET /api/v1/releases/status`
 - `POST /api/v1/releases/process`
 
-`/api/internal/discord/events` is not a maintainer endpoint. DiscordBot
-signs its raw body, timestamp, and nonce with `ROADMAP_GATEWAY_INGEST_SECRET`.
-
 `roadmap releases connect-ai` listens temporarily on
 `http://localhost:1455/auth/callback`, the callback registered for the Codex
 OAuth client. It validates the random OAuth state and sends the code and state

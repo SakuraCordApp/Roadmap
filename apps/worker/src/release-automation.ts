@@ -2,6 +2,7 @@ import { RoadmapError, type RoadmapConfig } from "@roadmap/core";
 import type { Env } from "./env.js";
 import { DiscordRestClient } from "./discord/rest.js";
 import { generateStructuredReleaseCopy } from "./ai-oauth.js";
+import { readBodyTextLimited, SIGNED_WEBHOOK_BODY_LIMIT } from "./request-body.js";
 import { constantTimeEqual, redactError, sha256 } from "./security.js";
 
 const GITHUB_API = "https://api.github.com";
@@ -67,7 +68,7 @@ export async function acceptGithubReleaseWebhook(
       503,
     );
   }
-  const body = await request.text();
+  const body = await readBodyTextLimited(request, SIGNED_WEBHOOK_BODY_LIMIT);
   await verifyGithubWebhook(request, body, env.GITHUB_WEBHOOK_SECRET);
   const delivery = request.headers.get("X-GitHub-Delivery");
   if (!delivery || !/^[0-9a-f-]{16,80}$/i.test(delivery)) {
@@ -143,8 +144,11 @@ export async function processPendingReleaseJobs(
     `SELECT id,repository,release_id,tag_name,release_name,release_url,target_commitish,
       published_at,previous_tag,generated_json,github_updated_at,discord_message_id,attempts
      FROM release_jobs
-     WHERE status IN ('pending','failed')
-       AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now')
+     WHERE attempts < 10 AND (
+       (status IN ('pending','failed')
+         AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+     )
      ORDER BY id LIMIT ?`,
   )
     .bind(limit)
@@ -154,7 +158,10 @@ export async function processPendingReleaseJobs(
   for (const job of jobs.results) {
     const locked = await env.DB.prepare(
       `UPDATE release_jobs SET status='processing',locked_at=?,attempts=attempts+1
-       WHERE id=? AND status IN ('pending','failed')`,
+       WHERE id=? AND attempts < 10 AND (
+         status IN ('pending','failed')
+         OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+       )`,
     )
       .bind(new Date().toISOString(), job.id)
       .run();
@@ -214,11 +221,10 @@ export async function releaseAutomationStatus(env: Env): Promise<{
 async function processReleaseJob(env: Env, config: RoadmapConfig, job: ReleaseJob): Promise<void> {
   const github = new GithubClient(requireSecret(env.GITHUB_RELEASE_TOKEN, "GITHUB_RELEASE_TOKEN"));
   let copy: GeneratedCopy;
-  let previousTag = job.previous_tag ?? undefined;
   if (job.generated_json) {
     copy = JSON.parse(job.generated_json) as GeneratedCopy;
   } else {
-    previousTag = await findPreviousReleaseTag(github, job);
+    const previousTag = await findPreviousReleaseTag(github, job);
     const commits = await collectReleaseCommits(
       github,
       job.repository,
@@ -420,7 +426,7 @@ async function verifyGithubWebhook(request: Request, body: string, secret: strin
   const expected = `sha256=${[...new Uint8Array(signature)]
     .map((byte) => byte.toString(16).padStart(2, "0"))
     .join("")}`;
-  if (!constantTimeEqual(received, expected)) {
+  if (!(await constantTimeEqual(received, expected))) {
     throw new RoadmapError("GITHUB_SIGNATURE_INVALID", "Invalid GitHub webhook signature.", 401);
   }
 }

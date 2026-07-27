@@ -47,10 +47,20 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
     );
   }, [search, priority, kind, status]);
 
-  const allItems = items.state === "ready" ? items.value : [];
+  const visibleStatusIds = useMemo(
+    () => new Set(config.publicSections.flatMap((section) => section.statuses)),
+    [config.publicSections],
+  );
+  const visibleItems = useMemo(
+    () =>
+      (items.state === "ready" ? items.value : []).filter((item) =>
+        visibleStatusIds.has(item.status),
+      ),
+    [items, visibleStatusIds],
+  );
   const filteredItems = useMemo(
-    () => filterPublicRoadmapItems(allItems, deferredSearch, priority, kind, status),
-    [allItems, deferredSearch, priority, kind, status],
+    () => filterPublicRoadmapItems(visibleItems, deferredSearch, priority, kind, status),
+    [visibleItems, deferredSearch, priority, kind, status],
   );
   const hasFilters = Boolean(search.trim() || priority || kind || status);
 
@@ -274,7 +284,11 @@ function RoadmapBoard({
 function RoadmapItemRow({ item }: { item: RoadmapItem }) {
   const priority = priorityLabel(item.priority);
   return (
-    <article className={`roadmap-item roadmap-item--${item.priority}`}>
+    <a
+      className={`roadmap-item roadmap-item--${item.priority}`}
+      href={`/items/${encodeURIComponent(item.id)}`}
+      aria-label={`${item.title}, ${priority} priority`}
+    >
       <img
         className="roadmap-item__priority-icon"
         src={`/brand/priority/${item.priority}.svg`}
@@ -284,7 +298,7 @@ function RoadmapItemRow({ item }: { item: RoadmapItem }) {
         title={`${priority} priority`}
       />
       <h4>{item.title}</h4>
-    </article>
+    </a>
   );
 }
 

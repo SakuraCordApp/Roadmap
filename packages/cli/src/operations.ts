@@ -47,9 +47,13 @@ export async function doctor(
     try {
       const migration = (
         await Promise.all(
-          ["0001_initial.sql", "0002_release_automation.sql", "0003_report_automation.sql"].map(
-            (name) => readFile(path.join(context.root, "migrations", name), "utf8"),
-          ),
+          [
+            "0001_initial.sql",
+            "0002_release_automation.sql",
+            "0003_report_automation.sql",
+            "0004_reliable_jobs.sql",
+            "0005_report_job_recovery.sql",
+          ].map((name) => readFile(path.join(context.root, "migrations", name), "utf8")),
         )
       ).join("\n");
       const result = await run(context, "sqlite3", [path.join(temp, "doctor.sqlite")], {
@@ -58,7 +62,7 @@ export async function doctor(
       });
       checks.push({
         check: "migration",
-        status: result.exitCode === 0 && result.stdout.trim().endsWith("3") ? "ok" : "failed",
+        status: result.exitCode === 0 && result.stdout.trim().endsWith("5") ? "ok" : "failed",
         detail:
           result.exitCode === 0
             ? "Fresh SQLite migration and schema metadata verified."
@@ -408,7 +412,7 @@ function adaptProvider(
       String(record.state ?? record.status).toLowerCase(),
     )
       ? "done"
-      : "inbox",
+      : "planned",
     priority: "medium",
     difficulty: "medium",
     references: record.html_url

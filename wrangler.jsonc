@@ -2,8 +2,7 @@
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sakuracord-roadmap",
   "main": "apps/worker/src/index.ts",
-  "compatibility_date": "2026-07-01",
-  "compatibility_flags": ["nodejs_compat"],
+  "compatibility_date": "2026-07-26",
   "assets": {
     "directory": "apps/web/dist",
     "binding": "ASSETS",
@@ -16,6 +15,18 @@
       "database_name": "sakuracord-roadmap",
       "database_id": "dedb4e6e-2de8-4d9c-8405-fe7fa1e08ffd",
       "migrations_dir": "migrations",
+    },
+  ],
+  "ratelimits": [
+    {
+      "name": "PUBLIC_RATE_LIMITER",
+      "namespace_id": "1001",
+      "simple": { "limit": 300, "period": 60 },
+    },
+    {
+      "name": "MUTATION_RATE_LIMITER",
+      "namespace_id": "1002",
+      "simple": { "limit": 60, "period": 60 },
     },
   ],
   "migrations": [
@@ -35,7 +46,6 @@
     "ROADMAP_PUBLIC_URL": "https://roadmap.sakuracord.app",
     "ROADMAP_ALLOWED_ORIGINS": "https://roadmap.sakuracord.app",
     "ROADMAP_GATEWAY_PROVIDER": "cloudflare",
-    "ROADMAP_DISCORD_BOT_URL": "https://discord-bot.sakuracord.app",
   },
   "observability": {
     "enabled": true,

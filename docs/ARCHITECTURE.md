@@ -19,11 +19,10 @@ use and contains no mutation credentials.
 
 The separate
 [`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot)
-repository owns Discord synchronization transport. Its free-tier Cloudflare
-provider schedules authenticated reconciliation; its optional Node provider
-normalizes documented Gateway dispatches and sends HMAC-authenticated events to
-this Worker. Both repositories build and deploy without a local sibling
-checkout.
+repository owns Cloudflare-native Discord automation. Scheduled reconciliation
+and Discord's HTTP interactions endpoint provide the supported runtime; no
+always-on Node gateway is required. Both repositories build and deploy without
+a local sibling checkout.
 
 `packages/mcp` exposes the roadmap API through MCP. Local repository inspection
 is explicitly read-only and is absent from remote Worker mode.
@@ -75,13 +74,13 @@ Synchronization work is at-least-once and idempotent:
 - job keys are durable and unique;
 - forum reports have a separate lockable retry queue and stable thread key;
 - structured report analysis is schema-validated before canonical creation;
-- Discord events have durable event IDs and payload hashes;
-- Node ingress has timestamped HMAC signatures and replay nonces;
+- Discord interaction jobs are persisted before deferred acknowledgement and
+  reclaimed after stale leases;
 - interaction IDs are replay-protected;
 - per-thread status replies are keyed by thread and status;
 - the visible Discord projection has a SHA-256 hash;
-- reconciliation reads active and paginated archived threads and can repair
-  missed/out-of-order Gateway events.
+- reconciliation reads active and paginated archived threads and repairs
+  changes missed during an earlier polling window.
 
 Partial Discord failures leave the canonical mutation complete and the job
 failed with bounded retry metadata. A later job or `roadmap reconcile` repairs

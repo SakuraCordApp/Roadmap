@@ -5,8 +5,10 @@ import {
   type RoadmapConfig,
   type RoadmapEngine,
 } from "@roadmap/core";
+import { z } from "zod";
 import type { Env } from "../env.js";
-import { verifyDiscordInteraction } from "../security.js";
+import { readBodyTextLimited } from "../request-body.js";
+import { redactError, verifyDiscordInteraction } from "../security.js";
 import { DiscordRestClient, safeAllowedMentions } from "./rest.js";
 
 interface Interaction {
@@ -33,27 +35,31 @@ interface Interaction {
   message?: { id: string };
 }
 
+interface WaitUntilContext {
+  waitUntil(promise: Promise<unknown>): void;
+}
+
+const InteractionEnvelopeSchema = z
+  .object({
+    id: z.string().regex(/^\d{17,20}$/),
+    application_id: z.string().regex(/^\d{17,20}$/),
+    type: z.number().int().min(1).max(5),
+    token: z.string().min(1).max(512),
+  })
+  .passthrough();
+
 export async function handleDiscordInteraction(
   request: Request,
   env: Env,
   config: RoadmapConfig,
   engine: RoadmapEngine,
+  executionContext: WaitUntilContext,
 ): Promise<Response> {
   if (!env.DISCORD_PUBLIC_KEY) return json({ error: "Discord is not configured." }, 503);
-  const body = await request.text();
+  const body = await readBodyTextLimited(request, 1_048_576);
   await verifyDiscordInteraction(request, env.DISCORD_PUBLIC_KEY, body);
-  const interaction = JSON.parse(body) as Interaction;
+  const interaction = parseInteraction(body);
   if (interaction.type === 1) return json({ type: 1 });
-  const replay = await env.DB.prepare("SELECT nonce FROM replay_nonces WHERE nonce=?")
-    .bind(`interaction:${interaction.id}`)
-    .first();
-  if (replay) return json({ type: 6 });
-  await env.DB.prepare(
-    "INSERT INTO replay_nonces(nonce,expires_at) VALUES(?,datetime('now','+1 day'))",
-  )
-    .bind(`interaction:${interaction.id}`)
-    .run();
-  const actor = discordActor(interaction);
   const customId = interaction.data?.custom_id;
   if (interaction.type === 2 && interaction.data?.name === "roadmap") {
     return json({
@@ -65,86 +71,156 @@ export async function handleDiscordInteraction(
       },
     });
   }
+  if (!isMaintainer(interaction, config)) {
+    if (customId !== "roadmap:subscribe") {
+      return ephemeral("You need a configured maintainer role to perform this action.");
+    }
+  }
+  if (interaction.type === 3 && customId && customId !== "roadmap:subscribe") {
+    const [namespace, action, threadId] = customId.split(":");
+    if (namespace !== "roadmap" || !action || !threadId) return ephemeral("Unknown action.");
+    if (["accept", "link", "decline", "duplicate", "request_info"].includes(action)) {
+      return json(modalFor(action, threadId));
+    }
+  }
+  if (!isDeferredInteraction(interaction)) return ephemeral("Unsupported roadmap interaction.");
+
+  await env.DB.prepare(
+    `INSERT OR IGNORE INTO discord_interaction_jobs(interaction_id,payload_json)
+     VALUES(?,?)`,
+  )
+    .bind(interaction.id, JSON.stringify(interaction))
+    .run();
+  executionContext.waitUntil(
+    processPendingInteractionJobs(env, config, engine, 1).catch((error) => {
+      console.error("Discord interaction background attempt failed", redactError(error));
+      return { processed: 0, failed: 1 };
+    }),
+  );
+  return deferredEphemeral();
+}
+
+export async function processPendingInteractionJobs(
+  env: Env,
+  config: RoadmapConfig,
+  engine: RoadmapEngine,
+  limit = 5,
+): Promise<{ processed: number; failed: number }> {
+  const jobs = await env.DB.prepare(
+    `SELECT interaction_id,payload_json,attempts
+     FROM discord_interaction_jobs
+     WHERE attempts < 10 AND (
+       (status IN ('pending','failed')
+         AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+       OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+     )
+     ORDER BY created_at LIMIT ?`,
+  )
+    .bind(Math.min(Math.max(limit, 1), 20))
+    .all<{ interaction_id: string; payload_json: string; attempts: number }>();
+  let processed = 0;
+  let failed = 0;
+  for (const job of jobs.results) {
+    const lock = await env.DB.prepare(
+      `UPDATE discord_interaction_jobs
+       SET status='processing',locked_at=datetime('now'),attempts=attempts+1
+       WHERE interaction_id=? AND attempts < 10 AND (
+         status IN ('pending','failed')
+         OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+       )`,
+    )
+      .bind(job.interaction_id)
+      .run();
+    if (lock.meta.changes !== 1) continue;
+    try {
+      const interaction = parseInteraction(job.payload_json);
+      const content = await performDeferredInteraction(env, config, engine, interaction);
+      await editOriginalInteractionResponse(interaction, content);
+      await env.DB.prepare(
+        `UPDATE discord_interaction_jobs
+         SET status='complete',payload_json='{}',completed_at=datetime('now'),
+             locked_at=NULL,last_error=NULL
+         WHERE interaction_id=?`,
+      )
+        .bind(job.interaction_id)
+        .run();
+      processed += 1;
+    } catch (error) {
+      const delay = Math.min(300, 2 ** Math.min(job.attempts + 1, 8));
+      await env.DB.prepare(
+        `UPDATE discord_interaction_jobs
+         SET status='failed',last_error=?,
+             available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?),locked_at=NULL
+         WHERE interaction_id=?`,
+      )
+        .bind(redactError(error).slice(0, 2_000), `+${delay} seconds`, job.interaction_id)
+        .run();
+      failed += 1;
+    }
+  }
+  return { processed, failed };
+}
+
+async function performDeferredInteraction(
+  env: Env,
+  config: RoadmapConfig,
+  engine: RoadmapEngine,
+  interaction: Interaction,
+): Promise<string> {
+  const actor = discordActor(interaction);
+  const customId = interaction.data?.custom_id;
   if (customId === "roadmap:subscribe") {
     const guildId = interaction.guild_id;
     const roleId = config.discord.updatesRoleId;
     if (!guildId || guildId !== config.discord.guildId || !roleId || !env.DISCORD_BOT_TOKEN) {
-      return ephemeral("Release update subscriptions are not configured.");
+      return "Release update subscriptions are not configured.";
     }
     const subscribed = Boolean(interaction.member?.roles?.includes(roleId));
     const rest = new DiscordRestClient(env.DISCORD_BOT_TOKEN);
     const rolePath = `/guilds/${guildId}/members/${actor.id}/roles/${roleId}`;
     if (subscribed) await rest.delete(rolePath);
     else await rest.put(rolePath);
-    return ephemeral(
-      subscribed
-        ? "You will no longer receive release update pings."
-        : "You will now receive release update pings.",
-    );
+    return subscribed
+      ? "You will no longer receive release update pings."
+      : "You will now receive release update pings.";
   }
   if (!isMaintainer(interaction, config)) {
-    return ephemeral("You need a configured maintainer role to perform this action.");
+    return "You need a configured maintainer role to perform this action.";
   }
   if (interaction.type === 3 && customId) {
     const [namespace, action, threadId] = customId.split(":");
-    if (namespace !== "roadmap" || !action || !threadId) return ephemeral("Unknown action.");
-    if (["accept", "link", "decline", "duplicate", "request_info"].includes(action)) {
-      return json(modalFor(action, threadId));
-    }
+    if (namespace !== "roadmap" || !action || !threadId) return "Unknown action.";
     if (action === "archive" || action === "reopen") {
       await modifyThread(env, threadId, action === "archive");
-      return ephemeral(`Thread ${action === "archive" ? "archived" : "reopened"}.`);
+      return `Thread ${action === "archive" ? "archived" : "reopened"}.`;
     }
     if (action === "status" && interaction.data?.values?.[0]) {
       const itemId = await linkedItemId(env, threadId);
-      if (!itemId) return ephemeral("This thread is not linked to a roadmap item.");
+      if (!itemId) return "This thread is not linked to a roadmap item.";
       const item = await engine.get(itemId);
       await engine.transition(item.id, interaction.data.values[0], item.revision, {
         actor,
         mutationId: `discord:${interaction.id}`,
       });
-      return ephemeral(`Moved ${item.id} to ${interaction.data.values[0]}.`);
+      return `Moved ${item.id} to ${interaction.data.values[0]}.`;
     }
   }
   if (interaction.type === 5 && customId) {
     const [namespace, action, threadId] = customId.split(":");
-    if (namespace !== "roadmap" || !action || !threadId) return ephemeral("Unknown modal.");
-    const fields = modalFields(interaction);
-    await handleModalAction(env, config, engine, actor, interaction.id, action, threadId, fields);
-    return ephemeral("Roadmap and Discord review state updated.");
+    if (namespace !== "roadmap" || !action || !threadId) return "Unknown modal.";
+    await handleModalAction(
+      env,
+      config,
+      engine,
+      actor,
+      interaction.id,
+      action,
+      threadId,
+      modalFields(interaction),
+    );
+    return "Roadmap and Discord review state updated.";
   }
-  return ephemeral("Unsupported roadmap interaction.");
-}
-
-export function reviewControls(threadId: string, config: RoadmapConfig): unknown[] {
-  return [
-    {
-      type: 1,
-      components: [
-        button("Accept", `roadmap:accept:${threadId}`, 3),
-        button("Link", `roadmap:link:${threadId}`, 1),
-        button("Decline", `roadmap:decline:${threadId}`, 4),
-        button("Duplicate", `roadmap:duplicate:${threadId}`, 2),
-        button("Request info", `roadmap:request_info:${threadId}`, 2),
-      ],
-    },
-    {
-      type: 1,
-      components: [
-        {
-          type: 3,
-          custom_id: `roadmap:status:${threadId}`,
-          placeholder: "Change linked roadmap status",
-          options: config.lifecycle.map((state) => ({
-            label: state.label,
-            value: state.id,
-          })),
-        },
-        button("Reopen", `roadmap:reopen:${threadId}`, 2),
-        button("Archive", `roadmap:archive:${threadId}`, 2),
-      ],
-    },
-  ];
+  return "Unsupported roadmap interaction.";
 }
 
 async function handleModalAction(
@@ -175,14 +251,6 @@ async function handleModalAction(
         { actor, mutationId: `discord:${interactionId}:edit` },
       );
       item = edited.after;
-      if (item.status === "inbox") {
-        item = (
-          await engine.transition(item.id, "planned", item.revision, {
-            actor,
-            mutationId: `discord:${interactionId}:accept`,
-          })
-        ).after;
-      }
       await setReviewState(env, threadId, "accepted", item.id, null);
     } else {
       const created = await engine.create(
@@ -348,12 +416,51 @@ async function modifyThread(env: Env, threadId: string, archived: boolean): Prom
   );
 }
 
-function button(label: string, customId: string, style: number) {
-  return { type: 2, label, custom_id: customId, style };
-}
-
 function ephemeral(content: string): Response {
   return json({ type: 4, data: { flags: 64, content, allowed_mentions: safeAllowedMentions() } });
+}
+
+function deferredEphemeral(): Response {
+  return json({ type: 5, data: { flags: 64 } });
+}
+
+function isDeferredInteraction(interaction: Interaction): boolean {
+  const customId = interaction.data?.custom_id;
+  if (customId === "roadmap:subscribe") return true;
+  if (interaction.type === 5 && customId?.startsWith("roadmap:")) return true;
+  if (interaction.type !== 3 || !customId) return false;
+  const action = customId.split(":")[1];
+  return action === "archive" || action === "reopen" || action === "status";
+}
+
+function parseInteraction(body: string): Interaction {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(body);
+  } catch {
+    throw new Error("Discord interaction body contains invalid JSON.");
+  }
+  return InteractionEnvelopeSchema.parse(parsed) as Interaction;
+}
+
+async function editOriginalInteractionResponse(
+  interaction: Interaction,
+  content: string,
+): Promise<void> {
+  const response = await fetch(
+    `https://discord.com/api/v10/webhooks/${encodeURIComponent(interaction.application_id)}/${encodeURIComponent(interaction.token)}/messages/@original`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        content,
+        allowed_mentions: safeAllowedMentions(),
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Discord interaction response update returned HTTP ${response.status}.`);
+  }
 }
 
 function json(data: unknown, status = 200): Response {

@@ -28,4 +28,25 @@ describe("Discord REST transport", () => {
 
     expect(fetcher).toHaveBeenCalledOnce();
   });
+
+  it("uses Discord message nonces instead of audit-log headers for idempotency", async () => {
+    const fetcher = vi.fn(async (_input, init) => {
+      const headers = new Headers(init?.headers);
+      expect(headers.has("X-Audit-Log-Reason")).toBe(false);
+      expect(JSON.parse(String(init?.body))).toMatchObject({
+        content: "Roadmap",
+        enforce_nonce: true,
+      });
+      expect(JSON.parse(String(init?.body)).nonce).toMatch(/^[0-9a-f]{25}$/);
+      return Response.json({ id: "message-id" });
+    }) as typeof fetch;
+
+    await new DiscordRestClient("test-token", fetcher).post(
+      "/channels/channel-id/messages",
+      { content: "Roadmap" },
+      "roadmap-message-key",
+    );
+
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
 });

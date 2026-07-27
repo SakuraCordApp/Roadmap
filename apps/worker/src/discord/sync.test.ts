@@ -7,9 +7,13 @@ import type { RoadmapEngine, RoadmapItem } from "@roadmap/core";
 import type { Env } from "../env.js";
 import { desiredForumTags } from "./forums.js";
 import {
+  attachmentContentFingerprint,
   combineUserReportText,
   componentsV2RoadmapBody,
+  discordReportSourceRevision,
   DiscordSyncService,
+  isReportEvidenceMessage,
+  isUserAuthoredDiscordMessage,
   reportCreatedContent,
 } from "./sync.js";
 
@@ -191,6 +195,35 @@ describe("Discord Components V2 roadmap layout", () => {
 });
 
 describe("Discord report copy and context", () => {
+  it("ignores refreshed Discord CDN signatures when comparing attachments", () => {
+    const first = [
+      {
+        id: "attachment",
+        filename: "screenshot.png",
+        size: 2_350,
+        content_type: "image/png",
+        width: 80,
+        height: 78,
+        url: "https://cdn.discordapp.com/attachments/thread/attachment/screenshot.png?ex=one&hm=aaa",
+        proxy_url:
+          "https://media.discordapp.net/attachments/thread/attachment/screenshot.png?ex=one&hm=aaa",
+      },
+    ];
+    const refreshed = [
+      {
+        ...first[0],
+        url: "https://cdn.discordapp.com/attachments/thread/attachment/screenshot.png?ex=two&hm=bbb",
+        proxy_url:
+          "https://media.discordapp.net/attachments/thread/attachment/screenshot.png?ex=two&hm=bbb",
+      },
+    ];
+
+    expect(attachmentContentFingerprint(refreshed)).toBe(attachmentContentFingerprint(first));
+    expect(attachmentContentFingerprint([{ ...refreshed[0], size: 2_351 }])).not.toBe(
+      attachmentContentFingerprint(first),
+    );
+  });
+
   it("uses reporter follow-ups as evidence while excluding bot messages", () => {
     expect(
       combineUserReportText(
@@ -199,13 +232,20 @@ describe("Discord report copy and context", () => {
             id: "bot-response",
             content: "I still need more information.",
             timestamp: "2026-07-25T10:02:00.000Z",
-            author: { bot: true },
+            author: { id: "roadmap-bot" },
           },
           {
             id: "follow-up",
-            content: "It happens in the main chat after loading older messages.",
+            content: "<@roadmap-bot> It happens in the main chat after loading older messages.",
             timestamp: "2026-07-25T10:03:00.000Z",
-            author: {},
+            author: { id: "reporter" },
+            mentions: [{ id: "roadmap-bot" }],
+          },
+          {
+            id: "unrelated-chatter",
+            content: "Anyone playing later?",
+            timestamp: "2026-07-25T10:04:00.000Z",
+            author: { id: "someone-else" },
           },
           {
             id: "starter",
@@ -216,13 +256,113 @@ describe("Discord report copy and context", () => {
         ],
         "starter",
         "fallback",
+        "roadmap-bot",
       ),
     ).toBe(
       [
         "Initial report:\nScrolling lags.",
-        "Follow-up message:\nIt happens in the main chat after loading older messages.",
+        "Bot-mentioned follow-up evidence (message ID: follow-up):\n<@roadmap-bot> It happens in the main chat after loading older messages.",
       ].join("\n\n"),
     );
+  });
+
+  it("keeps bot notifications and managed tags out of source identity", async () => {
+    const userMessages = [
+      {
+        id: "starter",
+        content: "Highlight mentions in yellow.",
+        timestamp: "2026-07-27T01:30:33.164Z",
+        author: { id: "reporter" },
+      },
+    ];
+    const botNotification = {
+      id: "created-notice",
+      content: "**Roadmap report created — SCR-01TEST**",
+      timestamp: "2026-07-27T10:19:03.868Z",
+      author: { id: "roadmap-bot" },
+      application_id: "roadmap-application",
+    };
+    const initialContent = combineUserReportText(
+      userMessages,
+      "starter",
+      "fallback",
+      "roadmap-bot",
+    );
+    const afterProjectionContent = combineUserReportText(
+      [...userMessages, botNotification],
+      "starter",
+      "fallback",
+      "roadmap-bot",
+    );
+
+    expect(afterProjectionContent).toBe(initialContent);
+    expect(isUserAuthoredDiscordMessage(botNotification, "roadmap-bot")).toBe(false);
+    const initialRevision = await discordReportSourceRevision({
+      kind: "feature_request",
+      title: "Mention highlights",
+      content: initialContent,
+      attachments: [],
+    });
+    const afterProjectionRevision = await discordReportSourceRevision({
+      kind: "feature_request",
+      title: "Mention highlights",
+      content: afterProjectionContent,
+      attachments: [],
+    });
+    expect(afterProjectionRevision).toBe(initialRevision);
+
+    const withUserFollowUp = combineUserReportText(
+      [
+        ...userMessages,
+        {
+          id: "follow-up",
+          content: "<@roadmap-bot> Ephemeral messages should be blue.",
+          timestamp: "2026-07-27T10:20:03.868Z",
+          author: { id: "reporter" },
+          mentions: [{ id: "roadmap-bot" }],
+        },
+      ],
+      "starter",
+      "fallback",
+      "roadmap-bot",
+    );
+    await expect(
+      discordReportSourceRevision({
+        kind: "feature_request",
+        title: "Mention highlights",
+        content: withUserFollowUp,
+        attachments: [],
+      }),
+    ).resolves.not.toBe(initialRevision);
+  });
+
+  it("accepts follow-up evidence only when the user mentions the bot", () => {
+    const unmentioned = {
+      id: "chatter",
+      content: "This is unrelated conversation.",
+      author: { id: "member" },
+      attachments: [{ id: "unrelated-file" }],
+    };
+    const mentioned = {
+      ...unmentioned,
+      id: "evidence",
+      content: "<@roadmap-bot> this log reproduces the issue",
+      mentions: [{ id: "roadmap-bot" }],
+      attachments: [{ id: "relevant-log" }],
+    };
+
+    expect(isReportEvidenceMessage(unmentioned, "starter", "roadmap-bot")).toBe(false);
+    expect(isReportEvidenceMessage(mentioned, "starter", "roadmap-bot")).toBe(true);
+    expect(
+      isReportEvidenceMessage({ ...unmentioned, id: "starter" }, "starter", "roadmap-bot"),
+    ).toBe(true);
+    expect(
+      isReportEvidenceMessage(
+        { ...mentioned, author: { id: "roadmap-bot", bot: true } },
+        "starter",
+        "roadmap-bot",
+      ),
+    ).toBe(false);
   });
 
   it("confirms creation without asking the reporter for more details", () => {
@@ -257,7 +397,11 @@ describe("Discord scheduled reconciliation", () => {
     });
     try {
       const db = (await miniflare.getD1Database("DB")) as unknown as D1Database;
-      for (const name of ["0001_initial.sql", "0003_report_automation.sql"]) {
+      for (const name of [
+        "0001_initial.sql",
+        "0003_report_automation.sql",
+        "0004_reliable_jobs.sql",
+      ]) {
         const migration = await readFile(path.resolve("migrations", name), "utf8");
         for (const statement of migration
           .split(/;\n\n/)
@@ -296,6 +440,9 @@ describe("Discord scheduled reconciliation", () => {
         .run();
 
       const requests: Array<{ method: string; path: string }> = [];
+      const reportContent = "Messages overlap after loading history.";
+      let followUpContent = "Unrelated conversation.";
+      let followUpMentions: Array<{ id: string }> = [];
       globalThis.fetch = vi.fn(async (input, init) => {
         const url = new URL(String(input));
         const method = init?.method ?? "GET";
@@ -331,9 +478,18 @@ describe("Discord scheduled reconciliation", () => {
             {
               id: threadId,
               channel_id: threadId,
-              content: "Messages overlap after loading history.",
+              content: reportContent,
               timestamp: createdAt,
               author: { id: "reporter" },
+              attachments: [],
+            },
+            {
+              id: "follow-up",
+              channel_id: threadId,
+              content: followUpContent,
+              timestamp: "2026-07-25T03:00:00.000Z",
+              author: { id: "reporter" },
+              mentions: followUpMentions,
               attachments: [],
             },
           ]);
@@ -367,27 +523,81 @@ describe("Discord scheduled reconciliation", () => {
       await expect(sync.reconcile()).resolves.toMatchObject({ threads: 1, errors: [] });
       expect(
         await db
-          .prepare("SELECT status FROM discord_report_jobs WHERE thread_id=?")
+          .prepare("SELECT status,rerun_requested FROM discord_report_jobs WHERE thread_id=?")
           .bind(threadId)
-          .first<{ status: string }>(),
-      ).toEqual({ status: "processing" });
+          .first<{ status: string; rerun_requested: number }>(),
+      ).toEqual({ status: "processing", rerun_requested: 0 });
       expect(
         await db
           .prepare("SELECT content FROM discord_submissions WHERE thread_id=?")
           .bind(threadId)
           .first<{ content: string }>(),
       ).toEqual({ content: "Messages overlap after loading history." });
+
+      await db
+        .prepare(
+          `UPDATE discord_report_jobs
+           SET status='complete',locked_at=NULL,completed_at=datetime('now')
+           WHERE thread_id=?`,
+        )
+        .bind(threadId)
+        .run();
+      await db
+        .prepare("UPDATE discord_state SET value=? WHERE key=?")
+        .bind(
+          JSON.stringify({
+            lastMessageId: null,
+            checkedAt: "2026-07-25T00:00:00.000Z",
+          }),
+          `thread_messages:${threadId}`,
+        )
+        .run();
+      followUpContent = "Still unrelated conversation.";
+      await expect(sync.reconcile()).resolves.toMatchObject({ threads: 1, errors: [] });
+      expect(
+        await db
+          .prepare("SELECT status FROM discord_report_jobs WHERE thread_id=?")
+          .bind(threadId)
+          .first<{ status: string }>(),
+      ).toEqual({ status: "complete" });
+
+      await db
+        .prepare("UPDATE discord_state SET value=? WHERE key=?")
+        .bind(
+          JSON.stringify({
+            lastMessageId: null,
+            checkedAt: "2026-07-25T00:00:00.000Z",
+          }),
+          `thread_messages:${threadId}`,
+        )
+        .run();
+      followUpContent = "<@ok> This additional detail is relevant.";
+      followUpMentions = [{ id: "ok" }];
+      await expect(sync.reconcile()).resolves.toMatchObject({ threads: 1, errors: [] });
+      expect(
+        await db
+          .prepare("SELECT status FROM discord_report_jobs WHERE thread_id=?")
+          .bind(threadId)
+          .first<{ status: string }>(),
+      ).toEqual({ status: "pending" });
+      expect(
+        await db
+          .prepare("SELECT content FROM discord_submissions WHERE thread_id=?")
+          .bind(threadId)
+          .first<{ content: string }>(),
+      ).toEqual({ content: reportContent });
+
       expect(
         requests.filter(
           (request) =>
             request.method === "POST" && request.path.endsWith(`/channels/${threadId}/messages`),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
       expect(
         requests.filter(
           (request) => request.method === "PATCH" && request.path.endsWith(`/channels/${threadId}`),
         ),
-      ).toHaveLength(1);
+      ).toHaveLength(0);
     } finally {
       await miniflare.dispose();
     }

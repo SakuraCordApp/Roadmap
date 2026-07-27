@@ -13,22 +13,30 @@ describe("Discord update subscriptions", () => {
   let env: Env;
   let originalFetch: typeof fetch;
   const keyPair = nacl.sign.keyPair();
-  const requests: Array<{ method: string; pathname: string }> = [];
+  const requests: Array<{ method: string; pathname: string; body?: string }> = [];
+  const background: Promise<unknown>[] = [];
 
   beforeEach(async () => {
     requests.length = 0;
+    background.length = 0;
     miniflare = new Miniflare({
       modules: true,
       script: "export default { fetch() { return new Response('ok') } }",
       d1Databases: ["DB"],
     });
     const db = (await miniflare.getD1Database("DB")) as unknown as D1Database;
-    const migration = await readFile(path.resolve("migrations/0001_initial.sql"), "utf8");
-    for (const statement of migration
-      .split(/;\n\n/)
-      .map((value) => value.trim())
-      .filter(Boolean)) {
-      await db.prepare(statement).run();
+    for (const name of [
+      "0001_initial.sql",
+      "0003_report_automation.sql",
+      "0004_reliable_jobs.sql",
+    ]) {
+      const migration = await readFile(path.resolve("migrations", name), "utf8");
+      for (const statement of migration
+        .split(/;\n\n/)
+        .map((value) => value.trim())
+        .filter(Boolean)) {
+        await db.prepare(statement).run();
+      }
     }
     env = {
       DB: db,
@@ -39,7 +47,11 @@ describe("Discord update subscriptions", () => {
     originalFetch = globalThis.fetch;
     globalThis.fetch = vi.fn(async (input, init) => {
       const url = new URL(String(input));
-      requests.push({ method: init?.method ?? "GET", pathname: url.pathname });
+      requests.push({
+        method: init?.method ?? "GET",
+        pathname: url.pathname,
+        ...(init?.body ? { body: String(init.body) } : {}),
+      });
       return new Response(null, { status: 204 });
     }) as typeof fetch;
   });
@@ -50,20 +62,25 @@ describe("Discord update subscriptions", () => {
   });
 
   it("adds and removes the configured Discord role instead of maintaining shadow subscription state", async () => {
-    const added = await interact("interaction-add", []);
+    const added = await interact("11111111111111112", []);
     expect(added.status).toBe(200);
-    expect((await added.json<any>()).data.content).toContain("now receive");
+    expect(await added.json<any>()).toMatchObject({ type: 5, data: { flags: 64 } });
+    await drainBackground();
     expect(requests[0]).toEqual({
       method: "PUT",
       pathname: `/api/v10/guilds/${roadmapConfig.discord.guildId}/members/77777777777777777/roles/${roadmapConfig.discord.updatesRoleId}`,
     });
+    expect(requests[1]?.pathname).toContain("/webhooks/11111111111111111/interaction-token/");
+    expect(requests[1]?.body).toContain("now receive");
 
-    const removed = await interact("interaction-remove", [roadmapConfig.discord.updatesRoleId!]);
-    expect((await removed.json<any>()).data.content).toContain("no longer");
-    expect(requests[1]).toEqual({
+    const removed = await interact("11111111111111113", [roadmapConfig.discord.updatesRoleId!]);
+    expect((await removed.json<any>()).type).toBe(5);
+    await drainBackground();
+    expect(requests[2]).toEqual({
       method: "DELETE",
       pathname: `/api/v10/guilds/${roadmapConfig.discord.guildId}/members/77777777777777777/roles/${roadmapConfig.discord.updatesRoleId}`,
     });
+    expect(requests[3]?.body).toContain("no longer");
 
     const shadowRows = await env.DB.prepare(
       "SELECT COUNT(*) AS count FROM discord_subscriptions",
@@ -103,7 +120,14 @@ describe("Discord update subscriptions", () => {
       env,
       roadmapConfig,
       {} as RoadmapEngine,
+      {
+        waitUntil: (promise) => background.push(promise),
+      } as ExecutionContext,
     );
+  }
+
+  async function drainBackground(): Promise<void> {
+    await Promise.all(background.splice(0));
   }
 });
 

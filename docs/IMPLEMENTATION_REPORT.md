@@ -28,8 +28,7 @@ the core engine.
 - The free-tier Cloudflare provider schedules REST reconciliation every minute
   because an outbound Gateway WebSocket keeps a Durable Object active and the
   account's existing Gateway workload already consumes its daily duration
-  allowance. The portable Node Gateway remains available for real-time
-  delivery.
+  allowance.
 - The MCP server implements the stable protocol directly over newline-delimited
   stdio and stateless HTTP. Local application-repository inspection uses
   argument-safe, read-only child processes and is opt-in.
@@ -56,7 +55,7 @@ the core engine.
   authentication/authorization, CORS, rate limiting, replay defenses, Discord
   interactions, synchronization/reconciliation, cron jobs, and remote MCP.
 - `SakuraCordApp/DiscordBot`: independent free-tier Cloudflare scheduled
-  reconciliation and Node-compatible real-time Gateway providers.
+  reconciliation and queued GitHub-to-Discord delivery.
 - `apps/web`: configurable, responsive, keyboard-accessible roadmap overview,
   filters/search, direct item routes, and safe external links. The public
   surface shows only change, priority, kind, and status.
@@ -127,8 +126,7 @@ The supported production sequence is:
 2. Review `npm run roadmap -- setup --dry-run`.
 3. Run `npm run roadmap -- setup` and follow the verified provider steps.
 4. Run `npm run roadmap -- doctor --api-url <public-url>`.
-5. Start the selected Gateway provider and run
-   `npm run roadmap -- reconcile`.
+5. Run `npm run roadmap -- reconcile` and verify the scheduled polling status.
 
 ## Remaining external verification
 
@@ -139,12 +137,10 @@ following cannot be truthfully certified without an authorized real instance:
   deployed health check;
 - a real Discord application, privileged `MESSAGE_CONTENT` approval, guild
   permissions, forum tags, archived-thread access, reactions, moderated
-  controls, Components V2 message edits, and sustained Gateway reconnects;
+  controls, Components V2 message edits, and scheduled reconciliation;
 - a live remote Codex installation and authenticated mutation through the
   deployed MCP endpoint; and
 - production backup restoration into a second Cloudflare account.
 
-For large Discord bots, sharding and Discord session-start coordination remain
-deployment-specific extensions. The Cloudflare provider uses scheduled
-reconciliation; the Node provider is
-the documented fallback.
+The Cloudflare provider uses scheduled reconciliation and Discord HTTP
+interactions; there is no Node fallback.

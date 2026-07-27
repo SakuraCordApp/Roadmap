@@ -6,22 +6,35 @@ describe("public API client", () => {
     vi.unstubAllGlobals();
   });
 
-  it("revalidates public reads instead of reusing stale browser responses", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ data: [] }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      }),
-    );
+  it("follows every cursor and leaves conditional caching to the browser", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [], nextCursor: "cursor-2" }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ data: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        }),
+      );
     vi.stubGlobal("fetch", fetchMock);
 
     await expect(fetchItems({})).resolves.toEqual([]);
-    expect(fetchMock).toHaveBeenCalledWith(
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      1,
       "/api/v1/items?limit=250",
       expect.objectContaining({
-        cache: "no-cache",
         headers: { Accept: "application/json" },
       }),
+    );
+    expect(fetchMock).toHaveBeenNthCalledWith(
+      2,
+      "/api/v1/items?limit=250&cursor=cursor-2",
+      expect.objectContaining({ headers: { Accept: "application/json" } }),
     );
   });
 });

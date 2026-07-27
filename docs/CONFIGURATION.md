@@ -130,13 +130,11 @@ Public runtime values:
 
 - `ROADMAP_PUBLIC_URL`
 - `ROADMAP_ALLOWED_ORIGINS` (comma-separated)
-- `ROADMAP_GATEWAY_PROVIDER` (`cloudflare`, `node`, or `disabled`)
-- `ROADMAP_DISCORD_BOT_URL` (the independently deployed bot control origin)
+- `ROADMAP_GATEWAY_PROVIDER` (`cloudflare` or `disabled`)
 
 Secrets:
 
 - `ROADMAP_ADMIN_TOKEN`
-- `ROADMAP_GATEWAY_INGEST_SECRET`
 - `DISCORD_APPLICATION_ID`
 - `DISCORD_PUBLIC_KEY`
 - `DISCORD_BOT_TOKEN`

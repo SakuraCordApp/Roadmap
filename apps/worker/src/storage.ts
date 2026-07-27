@@ -1,6 +1,7 @@
 import {
   ConflictError,
   HistoryEntrySchema,
+  RoadmapError,
   RoadmapItemSchema,
   type AtomicMutation,
   type HistoryEntry,
@@ -56,8 +57,14 @@ export class D1RoadmapStorage implements RoadmapStorage {
       bindings.push(query.completedSince);
     }
     if (query.cursor) {
-      conditions.push("updated_at < ?");
-      bindings.push(query.cursor);
+      const cursor = decodeCursor(query.cursor);
+      if (cursor.id) {
+        conditions.push("(updated_at < ? OR (updated_at = ? AND id > ?))");
+        bindings.push(cursor.updatedAt, cursor.updatedAt, cursor.id);
+      } else {
+        conditions.push("updated_at < ?");
+        bindings.push(cursor.updatedAt);
+      }
     }
     const limit = Math.min(Math.max(query.limit ?? 100, 1), 250);
     bindings.push(limit + 1);
@@ -74,7 +81,7 @@ export class D1RoadmapStorage implements RoadmapStorage {
     const last = data.at(-1);
     return {
       data,
-      ...(hasMore && last ? { nextCursor: last.updatedAt } : {}),
+      ...(hasMore && last ? { nextCursor: encodeCursor(last.updatedAt, last.id) } : {}),
     };
   }
 
@@ -356,4 +363,38 @@ export class D1RoadmapStorage implements RoadmapStorage {
 
 function normalizeSqliteTimestamp(value: string): string {
   return new Date(value).toISOString();
+}
+
+function encodeCursor(updatedAt: string, id: string): string {
+  const encoded = btoa(JSON.stringify([updatedAt, id]))
+    .replaceAll("+", "-")
+    .replaceAll("/", "_")
+    .replace(/=+$/, "");
+  return `v1.${encoded}`;
+}
+
+function decodeCursor(value: string): { updatedAt: string; id: string | null } {
+  if (!value.startsWith("v1.")) {
+    if (Number.isFinite(Date.parse(value))) return { updatedAt: value, id: null };
+    throw new RoadmapError("INVALID_CURSOR", "The pagination cursor is invalid.", 400);
+  }
+  try {
+    const encoded = value.slice(3).replaceAll("-", "+").replaceAll("_", "/");
+    const padded = encoded.padEnd(Math.ceil(encoded.length / 4) * 4, "=");
+    const parsed = JSON.parse(atob(padded)) as unknown;
+    if (
+      !Array.isArray(parsed) ||
+      parsed.length !== 2 ||
+      typeof parsed[0] !== "string" ||
+      !Number.isFinite(Date.parse(parsed[0])) ||
+      typeof parsed[1] !== "string" ||
+      parsed[1].length === 0 ||
+      parsed[1].length > 100
+    ) {
+      throw new Error("Malformed cursor.");
+    }
+    return { updatedAt: parsed[0], id: parsed[1] };
+  } catch {
+    throw new RoadmapError("INVALID_CURSOR", "The pagination cursor is invalid.", 400);
+  }
 }
