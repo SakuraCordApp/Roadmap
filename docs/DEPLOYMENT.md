@@ -177,8 +177,12 @@ the configured hostname.
 
 The production Worker is connected to `SakuraCordApp/Roadmap` through
 Cloudflare Workers Builds. Pushes to `main` run `npm run check` and then
-`npx wrangler deploy`. Runtime secrets remain in Cloudflare rather than GitHub.
-DiscordBot has its own independent Workers Builds connection and deploy gate.
+`npx wrangler deploy`. Before the new application schema handles traffic, the
+Worker applies any supported pending compatibility migration transactionally
+and records it in Wrangler's `d1_migrations` ledger. This keeps an automated
+code deployment from exposing a newer Worker to an older D1 schema. Runtime
+secrets remain in Cloudflare rather than GitHub. DiscordBot has its own
+independent Workers Builds connection and deploy gate.
 
 ## Deployment boundary
 

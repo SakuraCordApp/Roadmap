@@ -3,7 +3,6 @@ import type {
   CreateRoadmapItem,
   DiscordThreadLink,
   RoadmapPatch,
-  VerificationResult,
 } from "@roadmap/core";
 
 export class RoadmapApiClient {
@@ -60,14 +59,6 @@ export class RoadmapApiClient {
     });
   }
 
-  addResearch(id: string, expectedRevision: number, research: string) {
-    return this.request(`/api/v1/items/${encodeURIComponent(id)}/research`, {
-      method: "POST",
-      body: { expectedRevision, research },
-      mutation: true,
-    });
-  }
-
   addCriterion(
     id: string,
     expectedRevision: number,
@@ -76,18 +67,6 @@ export class RoadmapApiClient {
     return this.request(`/api/v1/items/${encodeURIComponent(id)}/acceptance-criteria`, {
       method: "POST",
       body: { expectedRevision, criterion },
-      mutation: true,
-    });
-  }
-
-  recordVerification(
-    id: string,
-    expectedRevision: number,
-    verification: Omit<VerificationResult, "id" | "actor" | "verifiedAt">,
-  ) {
-    return this.request(`/api/v1/items/${encodeURIComponent(id)}/verifications`, {
-      method: "POST",
-      body: { expectedRevision, verification },
       mutation: true,
     });
   }

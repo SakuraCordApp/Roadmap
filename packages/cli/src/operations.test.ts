@@ -30,7 +30,6 @@ describe("resumable imports", () => {
       area: "platform",
       status: "planned",
       priority: "medium",
-      difficulty: "small",
     };
     await writeFile(importFile, `${JSON.stringify([fixture], null, 2)}\n`);
 

@@ -62,9 +62,7 @@ notifications are emitted.
 - `roadmap_update`
 - `roadmap_transition`
 - `roadmap_link_discord_thread`
-- `roadmap_add_research`
 - `roadmap_add_acceptance_criterion`
-- `roadmap_record_verification`
 - `roadmap_generate_discord_view`
 - `roadmap_validate`
 - `roadmap_sync_status`
@@ -83,9 +81,8 @@ files. Remote mode does not expose local repository inspection.
 ## Safe mutation behavior
 
 The skill requires Codex to read the current item revision before every write,
-use the exact `expectedRevision`, and surface conflicts. Progress cannot be
-changed through evidence-free intuition. Completion overrides require an
-explicit reason and remain visible in audit history.
+use the exact `expectedRevision`, and surface conflicts. Completion overrides
+require an explicit reason and remain visible in audit history.
 
 All tool mutations call the same authenticated HTTP API as the CLI and Discord
 controls. MCP has no database bypass.

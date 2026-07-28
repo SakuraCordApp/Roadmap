@@ -527,7 +527,6 @@ export class DiscordSyncService {
         occurredAt,
       )
       .run();
-    await this.refreshCommunityCount(String(data.channel_id));
   }
 
   private async removeReaction(data: Record<string, any>): Promise<void> {
@@ -538,29 +537,6 @@ export class DiscordSyncService {
     )
       .bind(String(data.message_id), String(data.user_id), emojiKey)
       .run();
-    await this.refreshCommunityCount(String(data.channel_id));
-  }
-
-  private async refreshCommunityCount(threadId: string): Promise<void> {
-    const linked = await this.env.DB.prepare(
-      "SELECT linked_item_id FROM discord_submissions WHERE thread_id=?",
-    )
-      .bind(threadId)
-      .first<{ linked_item_id: string | null }>();
-    if (!linked?.linked_item_id) return;
-    const row = await this.env.DB.prepare(
-      `SELECT count(DISTINCT r.user_id) AS count
-       FROM discord_reactions r
-       JOIN discord_submissions s ON s.thread_id = r.thread_id
-       WHERE s.linked_item_id=?`,
-    )
-      .bind(linked.linked_item_id)
-      .first<{ count: number }>();
-    const item = await this.engine.get(linked.linked_item_id);
-    await this.engine.update(item.id, { communityReactionCount: row?.count ?? 0 }, item.revision, {
-      actor: { id: "discord-sync", displayName: "Discord sync", kind: "system" },
-      mutationId: `reaction-count:${threadId}:${row?.count ?? 0}:rev${item.revision}`,
-    });
   }
 
   private async processReportJob(threadId: string): Promise<{
@@ -716,12 +692,6 @@ export class DiscordSyncService {
       labels: [analysis.classification],
       area: analysis.area,
       priority: analysis.priority,
-      difficulty: analysis.difficulty,
-      confidence: analysis.confidence,
-      proposedImplementation: analysis.proposedImplementation,
-      affectedComponents: analysis.affectedComponents,
-      risks: analysis.risks,
-      requiredResearch: analysis.requiredResearch,
       references: [
         { kind: "research" as const, label: "Discord forum submission", url: threadUrl },
         ...attachmentReferences(relevantAttachments),

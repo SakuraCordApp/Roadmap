@@ -48,7 +48,6 @@ const config = defineRoadmapConfig({
     },
   ],
   priorities: [{ id: "medium", label: "Medium", color: "#FFFF00" }],
-  difficulties: [{ id: "large", label: "Large", color: "#FF00FF" }],
   publicSections: [
     { id: "planned", label: "Planned", statuses: ["planned"] },
     { id: "done", label: "Recently Done", statuses: ["done"], recentlyCompletedDays: 30 },
@@ -66,7 +65,7 @@ const config = defineRoadmapConfig({
 const actor: Actor = { id: "maintainer-1", displayName: "Maintainer", kind: "maintainer" };
 
 describe("RoadmapEngine", () => {
-  it("creates a valid item with stable ID, revision, and evidence-based progress", async () => {
+  it("creates a valid streamlined item with a stable ID and revision", async () => {
     const storage = new MemoryStorage();
     const engine = new RoadmapEngine(storage, config);
     const result = await engine.create(
@@ -77,14 +76,13 @@ describe("RoadmapEngine", () => {
         area: "app",
         status: "planned",
         priority: "medium",
-        difficulty: "large",
       },
       { actor, mutationId: "create-polls" },
     );
     expect(result.after.id).toMatch(/^TST-[0-9A-HJKMNP-TV-Z]{26}$/);
     expect(result.after.revision).toBe(1);
-    expect(result.after.progress.basis).toBe("manual");
-    expect(result.after.progress.rationale).toBeTruthy();
+    expect(Object.keys(result.after)).not.toContain("difficulty");
+    expect(Object.keys(result.after)).not.toContain("proposedImplementation");
   });
 
   it("rejects unknown configurable values", async () => {
@@ -98,7 +96,6 @@ describe("RoadmapEngine", () => {
           area: "missing",
           status: "planned",
           priority: "medium",
-          difficulty: "large",
         },
         { actor, mutationId: "invalid-area" },
       ),
@@ -116,7 +113,6 @@ describe("RoadmapEngine", () => {
         area: "app",
         status: "planned",
         priority: "medium",
-        difficulty: "large",
       },
       { actor, mutationId: "done-gate-create" },
     );
@@ -129,7 +125,7 @@ describe("RoadmapEngine", () => {
     const overridden = await engine.transition(created.after.id, "done", 1, {
       actor,
       mutationId: "done-gate-override",
-      overrideReason: "Maintainer explicitly accepts missing historical verification evidence.",
+      overrideReason: "Maintainer explicitly accepts missing historical acceptance evidence.",
     });
     expect(overridden.after.status).toBe("done");
     expect(storage.mutations.at(-1)?.overrideReason).toContain("historical");
@@ -146,7 +142,6 @@ describe("RoadmapEngine", () => {
         area: "app",
         status: "planned",
         priority: "medium",
-        difficulty: "large",
       },
       { actor, mutationId: "conflict-create" },
     );
@@ -163,7 +158,7 @@ describe("RoadmapEngine", () => {
     expect((await engine.get(created.after.id)).title).toBe("Updated once");
   });
 
-  it("preserves every omitted field during a partial update", async () => {
+  it("preserves report-supported fields during a partial update", async () => {
     const storage = new MemoryStorage();
     const engine = new RoadmapEngine(storage, config);
     const created = await engine.create(
@@ -174,11 +169,8 @@ describe("RoadmapEngine", () => {
         area: "app",
         status: "planned",
         priority: "medium",
-        difficulty: "large",
-        proposedImplementation: "Keep this implementation proposal.",
-        risks: ["Keep this risk."],
-        requiredResearch: ["Keep this research question."],
-        affectedComponents: ["ComposerView"],
+        labels: ["functionality"],
+        references: [{ kind: "research", label: "Report source" }],
       },
       { actor, mutationId: "partial-create" },
     );
@@ -189,10 +181,8 @@ describe("RoadmapEngine", () => {
       { actor, mutationId: "partial-update" },
     );
     expect(updated.after.description).toBe("Only this field changes.");
-    expect(updated.after.proposedImplementation).toBe("Keep this implementation proposal.");
-    expect(updated.after.risks).toEqual(["Keep this risk."]);
-    expect(updated.after.requiredResearch).toEqual(["Keep this research question."]);
-    expect(updated.after.affectedComponents).toEqual(["ComposerView"]);
+    expect(updated.after.labels).toEqual(["functionality"]);
+    expect(updated.after.references).toEqual([{ kind: "research", label: "Report source" }]);
   });
 
   it("does not allow general update to bypass transition validation", async () => {
@@ -206,7 +196,6 @@ describe("RoadmapEngine", () => {
         area: "app",
         status: "planned",
         priority: "medium",
-        difficulty: "large",
       },
       { actor, mutationId: "status-create" },
     );
@@ -229,7 +218,7 @@ describe("Discord projection", () => {
     );
     const detailedChange = {
       ...first,
-      proposedImplementation: "Changed private implementation detail",
+      references: [{ kind: "research" as const, label: "Changed non-projected report source" }],
     };
     const changed = await generateDiscordProjection(
       [detailedChange],
@@ -290,29 +279,9 @@ function sampleItem(id: string, title: string, status: string): RoadmapItem {
     area: "app",
     status,
     priority: "medium",
-    difficulty: "large",
-    confidence: 80,
-    progress: {
-      value: 20,
-      basis: "manual",
-      evidence: [],
-      rationale: "Manual test assessment.",
-      assessedAt: "2026-07-20T00:00:00.000Z",
-    },
-    proposedImplementation: "",
-    affectedComponents: [],
-    dependencies: [],
-    risks: [],
-    requiredResearch: [],
     references: [],
     acceptanceCriteria: [],
-    verificationResults: [],
-    benchmarks: [],
-    relatedCommits: [],
-    relatedPullRequests: [],
     linkedDiscordThreads: [],
-    communityReactionCount: 0,
-    duplicateReportCount: 0,
     createdAt: "2026-07-20T00:00:00.000Z",
     updatedAt: "2026-07-20T00:00:00.000Z",
     revision: 1,

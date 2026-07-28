@@ -1,7 +1,7 @@
 export function LoadingPage() {
   return (
     <main id="main-content" className="state-page" aria-busy="true" aria-label="Loading roadmap">
-      <img src="/brand/icon.png" width="1024" height="1024" fetchPriority="high" alt="" />
+      <img src="/brand/favicon.png" width="128" height="128" fetchPriority="high" alt="" />
       <p>Loading the roadmap</p>
       <span>Fetching the published changes.</span>
     </main>

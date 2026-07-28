@@ -262,7 +262,6 @@ async function handleModalAction(
           area: fields.area || config.areas[0]!.id,
           status: "planned",
           priority: "medium",
-          difficulty: "medium",
           linkedDiscordThreads: [
             {
               threadId,

@@ -82,7 +82,7 @@ export class RoadmapMcpServer {
           description: "Revision-safe canonical roadmap management tools.",
         },
         instructions:
-          "Read an item's current revision before mutation. Never infer progress without evidence or an explicit manual rationale.",
+          "Read an item's current revision before mutation. Keep roadmap data limited to report-supported fields and lifecycle metadata.",
       });
     }
     if (message.method === "ping") return this.result(message.id, {});
@@ -170,13 +170,12 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
     {
       title: "List roadmap items",
       description:
-        "List canonical roadmap items with optional status, area, type, priority, difficulty, and search filters.",
+        "List canonical roadmap items with optional status, area, type, priority, and search filters.",
       inputSchema: {
         status: z.string().optional(),
         area: z.string().optional(),
         type: z.string().optional(),
         priority: z.string().optional(),
-        difficulty: z.string().optional(),
         search: z.string().max(200).optional(),
         limit: z.number().int().min(1).max(250).default(100),
       },
@@ -189,7 +188,6 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
           area: args.area,
           type: args.type,
           priority: args.priority,
-          difficulty: args.difficulty,
           search: args.search,
           limit: args.limit,
         }),
@@ -212,13 +210,12 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
     {
       title: "Search roadmap",
       description:
-        "Search title and description, optionally narrowing difficult features, unresolved research, area, or lifecycle state.",
+        "Search title and description, optionally narrowing by area, type, or lifecycle state.",
       inputSchema: {
         query: z.string().min(1).max(200),
         status: z.string().optional(),
         area: z.string().optional(),
         type: z.string().optional(),
-        difficulty: z.string().optional(),
       },
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
@@ -238,13 +235,7 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
         area: z.string().min(1),
         status: z.string().default("planned"),
         priority: z.string().min(1),
-        difficulty: z.string().min(1),
-        confidence: z.number().int().min(0).max(100).optional(),
-        proposedImplementation: z.string().max(30_000).optional(),
-        affectedComponents: z.array(z.string()).max(100).optional(),
-        risks: z.array(z.string()).max(100).optional(),
-        requiredResearch: z.array(z.string()).max(100).optional(),
-        milestone: z.string().max(128).optional(),
+        labels: z.array(z.string().min(1).max(64)).max(50).optional(),
       },
       annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
     },
@@ -256,7 +247,7 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
     {
       title: "Update roadmap item",
       description:
-        "Update fields on an item using optimistic concurrency. Status changes must use roadmap_transition. Progress requires evidence or an explicit manual rationale.",
+        "Update fields on an item using optimistic concurrency. Status changes must use roadmap_transition.",
       inputSchema: {
         id: Id,
         expectedRevision: ExpectedRevision,
@@ -274,7 +265,7 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
     {
       title: "Transition roadmap item",
       description:
-        "Move an item through the configured lifecycle with revision checking and done-state verification gates.",
+        "Move an item through the configured lifecycle with revision checking and acceptance-criteria gates.",
       inputSchema: {
         id: Id,
         expectedRevision: ExpectedRevision,
@@ -318,22 +309,6 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
   );
 
   server.registerTool(
-    "roadmap_add_research",
-    {
-      title: "Add required research",
-      description: "Append a specific unresolved research question to an item.",
-      inputSchema: {
-        id: Id,
-        expectedRevision: ExpectedRevision,
-        research: z.string().min(1).max(2_000),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    },
-    async ({ id, expectedRevision, research }) =>
-      toolResult(await api.addResearch(id, expectedRevision, research)),
-  );
-
-  server.registerTool(
     "roadmap_add_acceptance_criterion",
     {
       title: "Add acceptance criterion",
@@ -354,37 +329,6 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
           evidence: [],
         }),
       ),
-  );
-
-  server.registerTool(
-    "roadmap_record_verification",
-    {
-      title: "Record verification result",
-      description:
-        "Record a test, benchmark, or manual verification result with evidence. This is required for normal transitions to done.",
-      inputSchema: {
-        id: Id,
-        expectedRevision: ExpectedRevision,
-        result: z.enum(["passed", "failed", "partial", "not_run"]),
-        summary: z.string().min(1).max(5_000),
-        environment: z.string().max(1_000).optional(),
-        evidence: z
-          .array(
-            z
-              .object({
-                kind: z.enum(["test", "commit", "pull_request", "benchmark", "research", "manual"]),
-                label: z.string().min(1).max(256),
-                url: z.url().optional(),
-                value: z.string().max(10_000).optional(),
-              })
-              .strict(),
-          )
-          .default([]),
-      },
-      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
-    },
-    async ({ id, expectedRevision, ...verification }) =>
-      toolResult(await api.recordVerification(id, expectedRevision, verification)),
   );
 
   server.registerTool(

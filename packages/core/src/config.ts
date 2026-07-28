@@ -48,7 +48,6 @@ export const RoadmapConfigSchema = z
     itemTypes: z.array(OptionSchema).min(1),
     lifecycle: z.array(LifecycleSchema).min(2),
     priorities: z.array(OptionSchema).min(1),
-    difficulties: z.array(OptionSchema).min(1),
     publicSections: z.array(
       z
         .object({
@@ -147,7 +146,6 @@ export function defineRoadmapConfig(input: z.input<typeof RoadmapConfigSchema>):
     ["itemTypes", config.itemTypes],
     ["lifecycle", config.lifecycle],
     ["priorities", config.priorities],
-    ["difficulties", config.difficulties],
   ];
   for (const [name, values] of uniqueGroups) {
     const ids = values.map((value) => value.id);
@@ -204,9 +202,6 @@ export function validateItemAgainstConfig(item: RoadmapItem, config: RoadmapConf
   if (!contains(config.lifecycle, item.status)) errors.push(`Unknown status: ${item.status}`);
   if (!contains(config.priorities, item.priority))
     errors.push(`Unknown priority: ${item.priority}`);
-  if (!contains(config.difficulties, item.difficulty)) {
-    errors.push(`Unknown difficulty: ${item.difficulty}`);
-  }
   if (!item.id.startsWith(`${config.project.idPrefix}-`)) {
     errors.push(`Item ID must start with ${config.project.idPrefix}-.`);
   }

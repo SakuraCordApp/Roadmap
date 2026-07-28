@@ -29,12 +29,6 @@ export interface ReportAnalysis {
   classification: "visual" | "functionality";
   priority: string;
   area: string;
-  difficulty: string;
-  confidence: number;
-  proposedImplementation: string;
-  affectedComponents: string[];
-  risks: string[];
-  requiredResearch: string[];
   acceptanceCriteria: string[];
   needsInformation: boolean;
   missingInformation: string[];
@@ -98,10 +92,12 @@ export async function analyzeDiscordReport(
           "Treat only labeled bot-mentioned follow-up messages and files as potential additional evidence.",
           "Ignore bot-mentioned follow-up evidence that is unrelated to the initial issue or feature request.",
           "Return only directly relevant bot-mentioned follow-up message IDs in relevantFollowUpMessageIds. Never include the initial report ID.",
-          "Do not invent reproduction steps, affected components, implementation details, or severity.",
+          "Base every output field only on the report text, selected tags, and attached files or images.",
+          "Do not infer repository structure, component names, implementation approaches, engineering difficulty, confidence scores, technical risks, or research plans.",
+          "Do not invent reproduction steps or severity.",
           "Prefer the user's classification and priority only when the evidence supports them.",
-          "Keep acceptance criteria objective and independently verifiable.",
-          "Put missing evidence or unknowns in requiredResearch and missingInformation.",
+          "Keep acceptance criteria objective, observable from the product, and directly supported by the report evidence.",
+          "Put missing evidence or unknowns in missingInformation.",
           "Keep summary neutral and concise. Describe the reported issue without asking the reporter for information, mentioning Inbox, or commenting on whether the report is sparse.",
         ],
       }),
@@ -181,12 +177,6 @@ function reportAnalysisSchema(config: RoadmapConfig) {
       classification: z.enum(["visual", "functionality"]),
       priority: z.enum(config.priorities.map((value) => value.id) as [string, ...string[]]),
       area: z.enum(config.areas.map((value) => value.id) as [string, ...string[]]),
-      difficulty: z.enum(config.difficulties.map((value) => value.id) as [string, ...string[]]),
-      confidence: z.number().int().min(0).max(100),
-      proposedImplementation: z.string().max(30_000),
-      affectedComponents: z.array(z.string().trim().min(1).max(256)).max(30),
-      risks: z.array(z.string().trim().min(1).max(2_000)).max(20),
-      requiredResearch: z.array(z.string().trim().min(1).max(2_000)).max(20),
       acceptanceCriteria: z.array(z.string().trim().min(1).max(2_000)).min(1).max(10),
       needsInformation: z.boolean(),
       missingInformation: z.array(z.string().trim().min(1).max(1_000)).max(20),
@@ -196,7 +186,7 @@ function reportAnalysisSchema(config: RoadmapConfig) {
     .strict();
 }
 
-function reportAnalysisJsonSchema(config: RoadmapConfig) {
+export function reportAnalysisJsonSchema(config: RoadmapConfig) {
   const stringArray = (maximum: number) => ({
     type: "array",
     maxItems: maximum,
@@ -211,12 +201,6 @@ function reportAnalysisJsonSchema(config: RoadmapConfig) {
       "classification",
       "priority",
       "area",
-      "difficulty",
-      "confidence",
-      "proposedImplementation",
-      "affectedComponents",
-      "risks",
-      "requiredResearch",
       "acceptanceCriteria",
       "needsInformation",
       "missingInformation",
@@ -229,12 +213,6 @@ function reportAnalysisJsonSchema(config: RoadmapConfig) {
       classification: { type: "string", enum: ["visual", "functionality"] },
       priority: { type: "string", enum: config.priorities.map((value) => value.id) },
       area: { type: "string", enum: config.areas.map((value) => value.id) },
-      difficulty: { type: "string", enum: config.difficulties.map((value) => value.id) },
-      confidence: { type: "integer", minimum: 0, maximum: 100 },
-      proposedImplementation: { type: "string", maxLength: 30_000 },
-      affectedComponents: stringArray(30),
-      risks: stringArray(20),
-      requiredResearch: stringArray(20),
       acceptanceCriteria: {
         type: "array",
         minItems: 1,

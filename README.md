@@ -12,9 +12,9 @@ independent D1 database.
 
 ## What is included
 
-- Strict, configurable roadmap schemas with stable IDs, acceptance criteria,
-  verification evidence, community signals, dependencies, references, and
-  revision numbers.
+- Strict, streamlined roadmap schemas with stable IDs, report-backed
+  classification, acceptance criteria, source references, and revision
+  numbers.
 - Optimistic concurrency, idempotency keys, database-triggered audit history,
   and synchronization jobs. Roadmap mutations never create Git commits.
 - A responsive React public roadmap focused on change, priority, kind, and
@@ -29,7 +29,7 @@ independent D1 database.
 - An independently deployable
   [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot) using
   free-tier Cloudflare scheduled reconciliation and queued GitHub notifications.
-- A protocol-native MCP server with 15 required roadmap tools plus optional
+- A protocol-native MCP server with 13 canonical roadmap tools plus optional
   read-only application-repository inspection.
 - A valid Codex plugin and roadmap-management skill.
 - A resumable, idempotent setup/doctor/deploy/upgrade CLI.
@@ -125,7 +125,7 @@ SakuraCord defaults and type validation live in `roadmap.config.ts` and
 The setup wizard can configure:
 
 - project identity, public URL, branding, and application repository;
-- areas, item types, lifecycle, priorities, difficulty levels, and their colors;
+- areas, item types, lifecycle, priorities, and their colors;
 - Cloudflare Worker and D1 names;
 - Discord guild, forums, roadmap channel, unified tags, generated emoji, and
   maintainer roles;

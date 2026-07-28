@@ -5,7 +5,6 @@ export interface ListItemsQuery {
   area?: string[];
   type?: string[];
   priority?: string[];
-  difficulty?: string[];
   search?: string;
   completedSince?: string;
   limit?: number;

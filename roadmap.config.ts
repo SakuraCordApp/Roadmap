@@ -28,14 +28,14 @@ const defaults = defineRoadmapConfig({
     mobileLogoUrl: "/brand/mobile-logo.webp",
     mobileLogoWidth: 1200,
     mobileLogoHeight: 600,
-    iconUrl: "/brand/icon.png",
-    primaryColor: "#F3A6C8",
-    accentColor: "#D9578B",
-    backgroundColor: "#0E0C13",
-    fontFamily: '"Avenir Next", "SF Pro Text", system-ui, sans-serif',
+    iconUrl: "/brand/favicon.png",
+    primaryColor: "#EF9BC4",
+    accentColor: "#CE6096",
+    backgroundColor: "#0C0B10",
+    fontFamily: '"LA Text", -apple-system, BlinkMacSystemFont, sans-serif',
   },
   areas: [
-    { id: "chat", label: "Chat & Messages", color: "#F3A6C8" },
+    { id: "chat", label: "Chat & Messages", color: "#EF9BC4" },
     { id: "communication", label: "Communication", color: "#A78BFA" },
     { id: "servers", label: "Servers & Roles", color: "#60A5FA" },
     { id: "personalization", label: "Personalization", color: "#F59E0B" },
@@ -62,7 +62,7 @@ const defaults = defineRoadmapConfig({
     {
       id: "polishing",
       label: "Polishing",
-      color: "#F3A6C8",
+      color: "#EF9BC4",
       transitionsTo: ["in_progress", "done"],
     },
     {
@@ -93,12 +93,6 @@ const defaults = defineRoadmapConfig({
     { id: "high", label: "High", color: "#F97316" },
     { id: "medium", label: "Medium", color: "#EAB308" },
     { id: "low", label: "Low", color: "#22C55E" },
-  ],
-  difficulties: [
-    { id: "small", label: "Small", color: "#34D399" },
-    { id: "medium", label: "Medium", color: "#60A5FA" },
-    { id: "large", label: "Large", color: "#A78BFA" },
-    { id: "epic", label: "Epic", color: "#F87171" },
   ],
   publicSections: [
     { id: "planned", label: "Planned", statuses: ["planned"] },

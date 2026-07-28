@@ -62,7 +62,7 @@ export async function doctor(
       });
       checks.push({
         check: "migration",
-        status: result.exitCode === 0 && result.stdout.trim().endsWith("5") ? "ok" : "failed",
+        status: result.exitCode === 0 && result.stdout.trim().endsWith("6") ? "ok" : "failed",
         detail:
           result.exitCode === 0
             ? "Fresh SQLite migration and schema metadata verified."
@@ -414,7 +414,6 @@ function adaptProvider(
       ? "done"
       : "planned",
     priority: "medium",
-    difficulty: "medium",
     references: record.html_url
       ? [{ kind: "research", label: `${provider} source`, url: record.html_url }]
       : [],

@@ -423,7 +423,7 @@ async function waitForHealth(apiUrl: string): Promise<void> {
         ok?: boolean;
         schemaVersion?: string;
       };
-      if (response.ok && body.ok && body.schemaVersion === "5") return;
+      if (response.ok && body.ok && body.schemaVersion === "6") return;
       last = `HTTP ${response.status}, schema ${body.schemaVersion ?? "unknown"}`;
     } catch (error) {
       last = error instanceof Error ? error.message : String(error);

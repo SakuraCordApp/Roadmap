@@ -46,7 +46,7 @@ the core engine.
 ## Implemented surfaces
 
 - `packages/core`: strict schemas, typed configuration, lifecycle and completion
-  gates, stable IDs, evidence-backed progress, optimistic concurrency, diffs,
+  gates, stable IDs, report-backed fields, optimistic concurrency, diffs,
   storage/provider ports, and Discord projections.
 - `migrations`: canonical items, history, synchronization state, Discord
   submissions/messages/reactions/events, replay nonces, tokens, subscriptions,
@@ -59,7 +59,7 @@ the core engine.
 - `apps/web`: configurable, responsive, keyboard-accessible roadmap overview,
   filters/search, direct item routes, and safe external links. The public
   surface shows only change, priority, kind, and status.
-- `packages/mcp`: all fifteen requested roadmap tools and opt-in, read-only
+- `packages/mcp`: thirteen canonical roadmap tools and opt-in, read-only
   source-repository inspection tools.
 - `plugins/roadmap-management`: valid Codex plugin, MCP configuration, and a
   revision-safe roadmap-management skill.

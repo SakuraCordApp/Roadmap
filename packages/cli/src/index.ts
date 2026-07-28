@@ -51,7 +51,6 @@ program
   .option("--lifecycle-colors <hexes>", "comma-separated colors matching lifecycle IDs")
   .option("--priorities <ids>", "comma-separated priority IDs")
   .option("--priority-colors <hexes>", "comma-separated colors matching priority IDs")
-  .option("--difficulties <ids>", "comma-separated difficulty IDs")
   .option("--primary-color <hex>")
   .option("--accent-color <hex>")
   .option("--background-color <hex>")

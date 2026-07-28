@@ -63,9 +63,8 @@ mutation ID, so a replay returns the original result.
 ## Completion gate
 
 Lifecycle states are configurable. A state with `completionGate: true` normally
-requires at least one acceptance criterion, every criterion satisfied, and a
-passing verification result. A bypass requires a non-empty override reason
-stored in history.
+requires at least one acceptance criterion and every criterion satisfied. A
+bypass requires a non-empty override reason stored in history.
 
 ## Synchronization
 
@@ -73,7 +72,9 @@ Synchronization work is at-least-once and idempotent:
 
 - job keys are durable and unique;
 - forum reports have a separate lockable retry queue and stable thread key;
-- structured report analysis is schema-validated before canonical creation;
+- structured report analysis is schema-validated before canonical creation and
+  is limited to fields supported by report text and attachments; repo-dependent
+  planning fields are not part of the canonical model;
 - Discord interaction jobs are persisted before deferred acknowledgement and
   reclaimed after stale leases;
 - interaction IDs are replay-protected;

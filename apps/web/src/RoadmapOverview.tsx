@@ -75,24 +75,21 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
     <>
       <section className="overview-hero" aria-labelledby="roadmap-title">
         <div className="overview-hero__copy">
-          <h1 id="roadmap-title">
-            <span translate="no">{config.project.name}</span> Roadmap
+          <h1 id="roadmap-title" aria-label={`${config.project.name} Roadmap`}>
+            <span className="overview-hero__name" translate="no">
+              {config.project.name}
+            </span>
+            <span className="overview-hero__context">Roadmap</span>
           </h1>
           <p>
             A clear view of new reports, planned work, active development, and completed changes.
           </p>
           <a className="primary-action" href="#browse">
-            Browse changes <span aria-hidden="true">↓</span>
+            Browse changes
+            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
+              <path d="M10 3.5v12m0 0 4.5-4.5M10 15.5 5.5 11" />
+            </svg>
           </a>
-        </div>
-        <div className="overview-hero__mark">
-          <img
-            src={config.branding.logoUrl}
-            width="1024"
-            height="1024"
-            fetchPriority="high"
-            alt={`${config.project.name} logo`}
-          />
         </div>
       </section>
 

@@ -27,7 +27,7 @@ Discord operational configuration, and deployment internals are omitted.
 
 Query parameters:
 
-- `status`, `area`, `type`, `priority`, `difficulty`: comma-separated IDs
+- `status`, `area`, `type`, `priority`: comma-separated IDs
 - `search`: case-insensitive title/description search
 - `completedSince`: ISO-8601 timestamp
 - `limit`: 1–250
@@ -115,12 +115,10 @@ Status is rejected here; use the transition endpoint.
 }
 ```
 
-### Evidence and link endpoints
+### Report criteria and link endpoints
 
 - `POST /api/v1/items/:id/link-discord`
-- `POST /api/v1/items/:id/research`
 - `POST /api/v1/items/:id/acceptance-criteria`
-- `POST /api/v1/items/:id/verifications`
 
 Each body includes `expectedRevision`.
 

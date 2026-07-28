@@ -105,10 +105,14 @@ failures use `High`; bounded work normally uses `Medium` or `Low`.
 
 New threads enter an internal pending-analysis queue. A durable analysis job
 reads the starter text and supported image/file attachments through the
-connected ChatGPT session. It creates one canonical bug or feature item in
-`planned`, links it back to the forum post, and corrects classification and
-priority when the submitted evidence warrants it. Files remain Discord-hosted
-references; they are not copied into canonical roadmap storage.
+connected ChatGPT session. From that evidence alone it normalizes the title and
+description, classifies the report, selects a report-supported priority and
+area, and writes observable acceptance criteria. It does not infer difficulty,
+confidence, repository components, an implementation approach, technical
+risks, or research plans because those fields are not part of the canonical
+model. The job creates one canonical bug or feature item in `planned` and links
+it back to the forum post. Files remain Discord-hosted references; they are not
+copied into canonical roadmap storage.
 
 Ordinary thread conversation is not roadmap evidence and does not trigger
 reanalysis. To incorporate a relevant follow-up comment or file, mention the
@@ -126,8 +130,8 @@ also terminal and lock/archive their threads.
 ## Simplified roadmap
 
 The public Discord message contains only stable ID, feature title, lifecycle
-section, optional area/milestone, and public detail link. Default SakuraCord
-sections are Planned, In Progress, Polishing, and Recently Done.
+section, optional area, and public detail link. Default SakuraCord sections are
+Planned, In Progress, Polishing, and Recently Done.
 
 Components V2 use one Container with Text Displays, Separators, a public-roadmap
 link, and a subscription button. The message has `IS_COMPONENTS_V2` (`1 << 15`);

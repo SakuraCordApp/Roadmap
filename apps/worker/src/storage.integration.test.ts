@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { unstable_splitSqlQuery as splitSqlQuery } from "wrangler";
 import { RoadmapEngine } from "@roadmap/core";
 import roadmapConfig from "../../../roadmap.config.js";
+import { ensureCurrentSchema, STREAMLINE_MIGRATION_STATEMENTS } from "./schema-migrations.js";
 import { D1RoadmapStorage } from "./storage.js";
 
 describe("D1 canonical storage", () => {
@@ -18,12 +19,14 @@ describe("D1 canonical storage", () => {
       d1Databases: ["DB"],
     });
     db = (await miniflare.getD1Database("DB")) as unknown as D1Database;
-    const migration = await readFile(path.resolve("migrations/0001_initial.sql"), "utf8");
-    for (const statement of migration
-      .split(/;\n\n/)
-      .map((value) => value.trim())
-      .filter(Boolean)) {
-      await db.prepare(statement).run();
+    for (const name of ["0001_initial.sql", "0006_streamline_roadmap_items.sql"]) {
+      const migration = await readFile(path.resolve("migrations", name), "utf8");
+      for (const statement of migration
+        .split(/;\n\n/)
+        .map((value) => value.trim())
+        .filter(Boolean)) {
+        await db.prepare(statement).run();
+      }
     }
   });
 
@@ -32,8 +35,12 @@ describe("D1 canonical storage", () => {
   });
 
   it("keeps the migration compatible with Wrangler's remote statement parser", async () => {
-    const migration = await readFile(path.resolve("migrations/0001_initial.sql"), "utf8");
-    const statements = splitSqlQuery(migration);
+    const initialMigration = await readFile(path.resolve("migrations/0001_initial.sql"), "utf8");
+    const streamlineMigration = await readFile(
+      path.resolve("migrations/0006_streamline_roadmap_items.sql"),
+      "utf8",
+    );
+    const statements = splitSqlQuery(initialMigration);
     const triggers = statements.filter((statement) => statement.startsWith("CREATE TRIGGER"));
 
     expect(triggers).toHaveLength(0);
@@ -43,6 +50,142 @@ describe("D1 canonical storage", () => {
       ),
     ).toBe(true);
     expect(statements.at(-1)).toContain("INSERT OR REPLACE INTO schema_metadata");
+    expect(splitSqlQuery(streamlineMigration).map(normalizeSql)).toEqual(
+      STREAMLINE_MIGRATION_STATEMENTS.map(normalizeSql),
+    );
+  });
+
+  it("removes legacy planning data from canonical rows and audit history", async () => {
+    const legacyMiniflare = new Miniflare({
+      modules: true,
+      script: "export default { fetch() { return new Response('ok') } }",
+      d1Databases: ["DB"],
+    });
+    try {
+      const legacyDb = (await legacyMiniflare.getD1Database("DB")) as unknown as D1Database;
+      for (const name of [
+        "0001_initial.sql",
+        "0002_release_automation.sql",
+        "0003_report_automation.sql",
+        "0004_reliable_jobs.sql",
+        "0005_report_job_recovery.sql",
+      ]) {
+        await applyMigration(legacyDb, name);
+      }
+      await legacyDb
+        .prepare(
+          `CREATE TABLE d1_migrations (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT,
+            applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+          )`,
+        )
+        .run();
+      const document = JSON.stringify({
+        id: "TST-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        title: "Legacy item",
+        difficulty: "large",
+        confidence: 90,
+        progress: { value: 50 },
+        proposedImplementation: "Remove me",
+        affectedComponents: ["LegacyView"],
+        dependencies: ["TST-other"],
+        risks: ["Legacy risk"],
+        requiredResearch: ["Legacy research"],
+        verificationResults: [{ result: "passed" }],
+        benchmarks: [{ value: 1 }],
+        relatedCommits: ["abc123"],
+        relatedPullRequests: ["https://example.com/pr"],
+        milestone: "Legacy milestone",
+        communityReactionCount: 4,
+        duplicateReportCount: 2,
+      });
+      const actor = JSON.stringify({ id: "test", displayName: "Test", kind: "system" });
+      await legacyDb
+        .prepare(
+          `INSERT INTO roadmap_items (
+            id,title,type,area,status,priority,difficulty,revision,created_at,updated_at,
+            completed_at,document,actor_json,mutation_id,mutation_action,override_reason
+          ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        )
+        .bind(
+          "TST-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          "Legacy item",
+          "feature",
+          "app",
+          "planned",
+          "medium",
+          "large",
+          1,
+          "2026-07-20T00:00:00.000Z",
+          "2026-07-20T00:00:00.000Z",
+          null,
+          document,
+          actor,
+          "legacy-create",
+          "create",
+          null,
+        )
+        .run();
+      await legacyDb
+        .prepare(
+          `INSERT INTO audit_history (
+            item_id,revision,mutation_id,action,actor_json,before_json,after_json,override_reason
+          ) VALUES (?,?,?,?,?,?,?,?)`,
+        )
+        .bind(
+          "TST-01ARZ3NDEKTSV4RRFFQ69G5FAV",
+          1,
+          "legacy-create",
+          "create",
+          actor,
+          document,
+          document,
+          null,
+        )
+        .run();
+
+      await Promise.all([ensureCurrentSchema(legacyDb), ensureCurrentSchema(legacyDb)]);
+
+      const columns = await legacyDb
+        .prepare("PRAGMA table_info(roadmap_items)")
+        .all<{ name: string }>();
+      expect(columns.results.map((column) => column.name)).not.toContain("difficulty");
+      const row = await legacyDb
+        .prepare("SELECT document FROM roadmap_items")
+        .first<{ document: string }>();
+      const history = await legacyDb
+        .prepare("SELECT before_json,after_json FROM audit_history")
+        .first<{ before_json: string; after_json: string }>();
+      const removedFields = [
+        "difficulty",
+        "confidence",
+        "progress",
+        "proposedImplementation",
+        "affectedComponents",
+        "dependencies",
+        "risks",
+        "requiredResearch",
+        "verificationResults",
+        "benchmarks",
+        "relatedCommits",
+        "relatedPullRequests",
+        "milestone",
+        "communityReactionCount",
+        "duplicateReportCount",
+      ];
+      for (const stored of [row?.document, history?.before_json, history?.after_json]) {
+        expect(stored).toBeTruthy();
+        const parsed = JSON.parse(stored!);
+        expect(removedFields.every((field) => !(field in parsed))).toBe(true);
+      }
+      const migration = await legacyDb
+        .prepare("SELECT name FROM d1_migrations")
+        .first<{ name: string }>();
+      expect(migration?.name).toBe("0006_streamline_roadmap_items.sql");
+    } finally {
+      await legacyMiniflare.dispose();
+    }
   });
 
   it("records create/update history and synchronization work in the mutation batch", async () => {
@@ -57,11 +200,10 @@ describe("D1 canonical storage", () => {
         area: "platform",
         status: "planned",
         priority: "medium",
-        difficulty: "medium",
       },
       { actor, mutationId: "d1-create-history" },
     );
-    const updated = await engine.update(created.after.id, { confidence: 90 }, 1, {
+    const updated = await engine.update(created.after.id, { title: "D1 history updated" }, 1, {
       actor,
       mutationId: "d1-update-history",
     });
@@ -69,8 +211,8 @@ describe("D1 canonical storage", () => {
     const history = await storage.history(created.after.id);
     expect(history).toHaveLength(2);
     expect(history.map((entry) => entry.revision)).toEqual([2, 1]);
-    expect(history[0]?.before?.confidence).toBe(50);
-    expect(history[0]?.after.confidence).toBe(90);
+    expect(history[0]?.before?.title).toBe("D1 history");
+    expect(history[0]?.after.title).toBe("D1 history updated");
     const jobs = await db
       .prepare("SELECT count(*) AS count FROM sync_jobs")
       .first<{ count: number }>();
@@ -88,7 +230,6 @@ describe("D1 canonical storage", () => {
       area: "platform",
       status: "planned",
       priority: "medium",
-      difficulty: "medium",
     };
     const first = await engine.create(input, { actor, mutationId: "idempotent-create" });
     const replay = await engine.create(input, { actor, mutationId: "idempotent-create" });
@@ -112,3 +253,17 @@ describe("D1 canonical storage", () => {
     ]);
   });
 });
+
+async function applyMigration(db: D1Database, name: string) {
+  const migration = await readFile(path.resolve("migrations", name), "utf8");
+  for (const statement of migration
+    .split(/;\n\n/)
+    .map((value) => value.trim())
+    .filter(Boolean)) {
+    await db.prepare(statement).run();
+  }
+}
+
+function normalizeSql(statement: string) {
+  return statement.replace(/\s+/g, " ").trim();
+}

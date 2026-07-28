@@ -46,7 +46,6 @@ interface SetupOptions {
   lifecycleColors?: string;
   priorities?: string;
   priorityColors?: string;
-  difficulties?: string;
   primaryColor?: string;
   accentColor?: string;
   backgroundColor?: string;
@@ -93,7 +92,6 @@ interface SetupAnswers {
   lifecycleColors?: string[];
   priorities?: string[];
   priorityColors?: string[];
-  difficulties?: string[];
   primaryColor: string;
   accentColor: string;
   backgroundColor: string;
@@ -275,7 +273,6 @@ export async function setup(context: CliContext, options: SetupOptions): Promise
       ...(answers.priorities
         ? { priorities: makeOptions(answers.priorities, answers.priorityColors) }
         : {}),
-      ...(answers.difficulties ? { difficulties: makeOptions(answers.difficulties) } : {}),
       ...(answers.lifecycle
         ? {
             lifecycle: makeLifecycle(answers.lifecycle, answers.lifecycleColors),
@@ -686,11 +683,6 @@ async function gatherAnswers(
         : Array.isArray(instance.priorities)
           ? { priorityColors: instance.priorities.map((value: { color: string }) => value.color) }
           : {}),
-    ...(options.difficulties
-      ? { difficulties: parseIds(options.difficulties) }
-      : saved.difficulties
-        ? { difficulties: saved.difficulties }
-        : {}),
   };
   if (defaults.lifecycle && defaults.lifecycleColors) {
     assertColorCount(defaults.lifecycleColors, defaults.lifecycle.length, "Lifecycle");
@@ -814,7 +806,7 @@ async function gatherAnswers(
     {
       type: "confirm",
       name: "customizeTaxonomy",
-      message: "Customize areas, types, lifecycle, priorities, and difficulty now?",
+      message: "Customize areas, types, lifecycle, and priorities now?",
       initial: false,
     },
     {
@@ -859,13 +851,6 @@ async function gatherAnswers(
       message: "Priority colors in the same order, comma-separated",
       initial: defaults.priorityColors?.join(",") ?? DEFAULT_PRIORITY_COLORS.join(","),
       validate: colorListValidator,
-    },
-    {
-      type: (_value: string, answers: Record<string, unknown>) =>
-        answers.customizeTaxonomy ? "text" : null,
-      name: "difficulties",
-      message: "Difficulty IDs, comma-separated",
-      initial: "small,medium,large,epic",
     },
     {
       type: "select",
@@ -957,7 +942,6 @@ async function gatherAnswers(
     delete values.lifecycleColors;
     delete values.priorities;
     delete values.priorityColors;
-    delete values.difficulties;
   } else {
     values.areas = parseIds(String(values.areas));
     values.itemTypes = parseIds(String(values.itemTypes));
@@ -973,7 +957,6 @@ async function gatherAnswers(
       values.priorities.length,
       "Priority",
     );
-    values.difficulties = parseIds(String(values.difficulties));
   }
   return values;
 }
@@ -1504,7 +1487,6 @@ function hasProjectOverrides(options: SetupOptions): boolean {
     options.lifecycleColors,
     options.priorities,
     options.priorityColors,
-    options.difficulties,
     options.primaryColor,
     options.accentColor,
     options.backgroundColor,

@@ -9,7 +9,6 @@ export interface DiscordRoadmapSection {
     title: string;
     priority: string;
     area?: string;
-    milestone?: string;
     linkedThreadUrls: string[];
   }>;
 }
@@ -47,7 +46,6 @@ export async function generateDiscordProjection(
           title: item.title,
           priority: item.priority,
           area: item.area,
-          ...(item.milestone ? { milestone: item.milestone } : {}),
           linkedThreadUrls: item.linkedDiscordThreads.map((thread) => thread.url),
         }));
       return { id: section.id, label: section.label, items: projected };
@@ -59,12 +57,11 @@ export async function generateDiscordProjection(
     sections: group.sections.map((section) => ({
       id: section.id,
       label: section.label,
-      items: section.items.map(({ id, title, priority, area, milestone }) => ({
+      items: section.items.map(({ id, title, priority, area }) => ({
         id,
         title,
         priority,
         area,
-        milestone,
       })),
     })),
   }));

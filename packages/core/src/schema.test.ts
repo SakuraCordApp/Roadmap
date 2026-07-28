@@ -1,30 +1,40 @@
 import { describe, expect, it } from "vitest";
 import {
   CreateRoadmapItemSchema,
-  ProgressSchema,
+  EvidenceReferenceSchema,
   RoadmapItemSchema,
   RoadmapPatchSchema,
 } from "./schema.js";
 
 describe("strict roadmap schemas", () => {
-  it("rejects evidence-free non-manual progress", () => {
-    const result = ProgressSchema.safeParse({
-      value: 50,
-      basis: "tests",
-      evidence: [],
-      assessedAt: "2026-07-24T00:00:00.000Z",
-    });
-    expect(result.success).toBe(false);
-  });
-
-  it("rejects manual progress without a rationale", () => {
-    const result = ProgressSchema.safeParse({
-      value: 50,
-      basis: "manual",
-      evidence: [],
-      assessedAt: "2026-07-24T00:00:00.000Z",
-    });
-    expect(result.success).toBe(false);
+  it("rejects removed planning fields instead of silently retaining them", () => {
+    const base = {
+      title: "Streamlined report",
+      description: "Only report-supported fields belong in canonical data.",
+      type: "bug",
+      area: "visual",
+      status: "planned",
+      priority: "low",
+    };
+    for (const field of [
+      "difficulty",
+      "confidence",
+      "progress",
+      "proposedImplementation",
+      "affectedComponents",
+      "dependencies",
+      "risks",
+      "requiredResearch",
+      "verificationResults",
+      "benchmarks",
+      "relatedCommits",
+      "relatedPullRequests",
+      "milestone",
+      "communityReactionCount",
+      "duplicateReportCount",
+    ]) {
+      expect(CreateRoadmapItemSchema.safeParse({ ...base, [field]: "legacy" }).success).toBe(false);
+    }
   });
 
   it("rejects malformed Discord snowflakes and unstable IDs", () => {
@@ -33,6 +43,20 @@ describe("strict roadmap schemas", () => {
       linkedDiscordThreads: [{ threadId: "42" }],
     });
     expect(result.success).toBe(false);
+  });
+
+  it("accepts only HTTP(S) links in user-visible evidence", () => {
+    const reference = { kind: "manual", label: "Report attachment" } as const;
+    expect(
+      EvidenceReferenceSchema.safeParse({ ...reference, url: "https://example.com/report" })
+        .success,
+    ).toBe(true);
+    expect(
+      EvidenceReferenceSchema.safeParse({ ...reference, url: "javascript:alert(1)" }).success,
+    ).toBe(false);
+    expect(
+      EvidenceReferenceSchema.safeParse({ ...reference, url: "data:text/html,unsafe" }).success,
+    ).toBe(false);
   });
 
   it("rejects unknown fields and does not synthesize omitted patch defaults", () => {
@@ -49,7 +73,6 @@ describe("strict roadmap schemas", () => {
       area: "visual",
       status: "inbox",
       priority: "low",
-      difficulty: "small",
       labels: ["visual"],
     });
     expect(created.labels).toEqual(["visual"]);

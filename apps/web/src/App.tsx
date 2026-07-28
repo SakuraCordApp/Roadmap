@@ -1,4 +1,4 @@
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { fetchConfig, type PublicConfig } from "./api.js";
 import { type LoadState, toMessage } from "./load-state.js";
 import { buildPrimaryNavigation } from "./navigation.js";
@@ -32,7 +32,7 @@ export function App() {
     "--brand-soft": value.branding.primaryColor,
     "--brand-strong": value.branding.accentColor,
     "--canvas": value.branding.backgroundColor,
-    "--font-ui": value.branding.fontFamily,
+    "--font-fallback": value.branding.fontFamily,
   } as CSSProperties;
 
   return (
@@ -66,7 +66,28 @@ function PageShell({
   children: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const menuButtonRef = useRef<HTMLButtonElement>(null);
+  const navigationRef = useRef<HTMLElement>(null);
   const navigation = buildPrimaryNavigation(config, isDetail ? "detail" : "overview");
+
+  useEffect(() => {
+    if (!menuOpen) return;
+
+    const closeMenuFromOutside = (event: PointerEvent) => {
+      if (!(event.target instanceof Node)) return;
+      if (
+        menuButtonRef.current?.contains(event.target) ||
+        navigationRef.current?.contains(event.target)
+      ) {
+        return;
+      }
+      setMenuOpen(false);
+    };
+
+    document.addEventListener("pointerdown", closeMenuFromOutside);
+    return () => document.removeEventListener("pointerdown", closeMenuFromOutside);
+  }, [menuOpen]);
+
   const brandContent = (
     <>
       <img
@@ -78,7 +99,7 @@ function PageShell({
         alt=""
       />
       <span translate="no">{config.project.name}</span>
-      <span className="site-brand__context">Engineering roadmap</span>
+      <span className="site-brand__context">Roadmap</span>
     </>
   );
 
@@ -95,6 +116,7 @@ function PageShell({
           </div>
         )}
         <button
+          ref={menuButtonRef}
           className="menu-button"
           type="button"
           aria-expanded={menuOpen}
@@ -105,6 +127,7 @@ function PageShell({
           <span aria-hidden="true" />
         </button>
         <nav
+          ref={navigationRef}
           id="primary-navigation"
           className={menuOpen ? "primary-navigation is-open" : "primary-navigation"}
           aria-label="Primary"
@@ -118,7 +141,6 @@ function PageShell({
               onClick={() => setMenuOpen(false)}
             >
               {link.label}
-              {link.external && <span aria-hidden="true"> ↗</span>}
             </a>
           ))}
         </nav>

@@ -41,7 +41,7 @@ without external images.
 
 ## Taxonomy
 
-Areas, item types, priorities, and difficulties contain:
+Areas, item types, and priorities contain:
 
 ```json
 { "id": "platform", "label": "Platform", "color": "#94A3B8" }
@@ -64,8 +64,8 @@ Lifecycle states add:
 }
 ```
 
-`completionGate` is the configurable acceptance/verification gate; the engine
-does not require a state to be named `done`.
+`completionGate` is the configurable acceptance-criteria gate; the engine does
+not require a state to be named `done`.
 
 `publicSections` controls public/Discord grouping. A section can include one or
 more statuses and an optional `recentlyCompletedDays`.

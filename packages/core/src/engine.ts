@@ -49,29 +49,10 @@ export class RoadmapEngine {
     const item: RoadmapItem = {
       ...parsed,
       id: `${this.config.project.idPrefix}-${ulid()}`,
-      confidence: parsed.confidence ?? 50,
-      progress: parsed.progress ?? {
-        value: 0,
-        basis: "manual",
-        evidence: [],
-        rationale: "Initial assessment at roadmap item creation.",
-        assessedAt: now,
-      },
-      proposedImplementation: parsed.proposedImplementation ?? "",
       labels: parsed.labels ?? [],
-      affectedComponents: parsed.affectedComponents ?? [],
-      dependencies: parsed.dependencies ?? [],
-      risks: parsed.risks ?? [],
-      requiredResearch: parsed.requiredResearch ?? [],
       references: parsed.references ?? [],
       acceptanceCriteria: parsed.acceptanceCriteria ?? [],
-      verificationResults: parsed.verificationResults ?? [],
-      benchmarks: parsed.benchmarks ?? [],
-      relatedCommits: parsed.relatedCommits ?? [],
-      relatedPullRequests: parsed.relatedPullRequests ?? [],
       linkedDiscordThreads: parsed.linkedDiscordThreads ?? [],
-      communityReactionCount: parsed.communityReactionCount ?? 0,
-      duplicateReportCount: parsed.duplicateReportCount ?? 0,
       createdAt: now,
       updatedAt: now,
       revision: 1,
@@ -146,11 +127,10 @@ export class RoadmapEngine {
       const criteriaSatisfied =
         before.acceptanceCriteria.length > 0 &&
         before.acceptanceCriteria.every((criterion) => criterion.satisfied);
-      const verified = before.verificationResults.some((result) => result.result === "passed");
-      if ((!criteriaSatisfied || !verified) && !context.overrideReason) {
+      if (!criteriaSatisfied && !context.overrideReason) {
         throw new ValidationError(
-          "Moving an item to done requires satisfied acceptance criteria and a passing verification. Provide an explicit override reason if necessary.",
-          { criteriaSatisfied, verified },
+          "Moving an item to done requires satisfied acceptance criteria. Provide an explicit override reason if necessary.",
+          { criteriaSatisfied },
         );
       }
     }
@@ -175,9 +155,6 @@ export class RoadmapEngine {
 
   private validate(item: RoadmapItem): void {
     const errors = validateItemAgainstConfig(item, this.config);
-    for (const dependency of item.dependencies) {
-      if (dependency === item.id) errors.push("An item cannot depend on itself.");
-    }
     if (errors.length > 0) throw new ValidationError("Roadmap item is invalid.", errors);
   }
 }

@@ -7,7 +7,6 @@ import {
   RoadmapItemSchema,
   RoadmapPatchSchema,
   TransitionRequestSchema,
-  VerificationResultSchema,
   diffValues,
   generateDiscordProjection,
 } from "@roadmap/core";
@@ -37,6 +36,7 @@ import {
   FORUM_CONFIGURATION_BODY_LIMIT,
   readJsonBodyLimited,
 } from "./request-body.js";
+import { ensureCurrentSchema } from "./schema-migrations.js";
 import { D1RoadmapStorage } from "./storage.js";
 
 type Variables = {
@@ -67,7 +67,6 @@ const ListQuerySchema = z
     area: csvFilter,
     type: csvFilter,
     priority: csvFilter,
-    difficulty: csvFilter,
     search: z.string().trim().max(200).optional(),
     completedSince: isoDateTime.optional(),
     cursor: z.string().trim().min(1).max(500).optional(),
@@ -124,6 +123,10 @@ export function createApp() {
       maxAge: 86_400,
       credentials: false,
     })(context, next);
+  });
+  app.use("*", async (context, next) => {
+    await ensureCurrentSchema(context.env.DB);
+    await next();
   });
   app.use("*", async (context, next) => {
     const storage = new D1RoadmapStorage(context.env.DB);
@@ -194,7 +197,7 @@ export function createApp() {
     ).first<{ value: string }>();
     return context.json(
       {
-        ok: schema?.value === "5",
+        ok: schema?.value === "6",
         schemaVersion: schema?.value ?? null,
         project: roadmapConfig.project.slug,
       },
@@ -211,7 +214,6 @@ export function createApp() {
       areas: roadmapConfig.areas,
       itemTypes: roadmapConfig.itemTypes,
       priorities: roadmapConfig.priorities,
-      difficulties: roadmapConfig.difficulties,
     };
     return context.json(
       {
@@ -232,7 +234,6 @@ export function createApp() {
       ...(query.area ? { area: query.area } : {}),
       ...(query.type ? { type: query.type } : {}),
       ...(query.priority ? { priority: query.priority } : {}),
-      ...(query.difficulty ? { difficulty: query.difficulty } : {}),
       ...(query.search ? { search: query.search } : {}),
       ...(query.completedSince ? { completedSince: query.completedSince } : {}),
       ...(query.cursor ? { cursor: query.cursor } : {}),
@@ -400,24 +401,6 @@ export function createApp() {
     return context.json(withDiff(result));
   });
 
-  app.post("/api/v1/items/:id/research", async (context) => {
-    const actor = await authorizeMutation(context.req.raw, context.env);
-    const body = z
-      .object({
-        expectedRevision: z.number().int().positive(),
-        research: z.string().trim().min(1).max(2_000),
-      })
-      .parse(await readJsonBodyLimited(context.req.raw));
-    const item = await context.var.engine.get(context.req.param("id"));
-    const result = await context.var.engine.update(
-      item.id,
-      { requiredResearch: [...item.requiredResearch, body.research] },
-      body.expectedRevision,
-      { actor, mutationId: mutationId(context.req.raw) },
-    );
-    return context.json(withDiff(result));
-  });
-
   app.post("/api/v1/items/:id/acceptance-criteria", async (context) => {
     const actor = await authorizeMutation(context.req.raw, context.env);
     const body = z
@@ -435,30 +418,6 @@ export function createApp() {
     const result = await context.var.engine.update(
       item.id,
       { acceptanceCriteria: [...item.acceptanceCriteria, criterion] },
-      body.expectedRevision,
-      { actor, mutationId: mutationId(context.req.raw) },
-    );
-    return context.json(withDiff(result));
-  });
-
-  app.post("/api/v1/items/:id/verifications", async (context) => {
-    const actor = await authorizeMutation(context.req.raw, context.env);
-    const body = z
-      .object({
-        expectedRevision: z.number().int().positive(),
-        verification: VerificationResultSchema.omit({ id: true, actor: true, verifiedAt: true }),
-      })
-      .parse(await readJsonBodyLimited(context.req.raw));
-    const item = await context.var.engine.get(context.req.param("id"));
-    const verification = VerificationResultSchema.parse({
-      ...body.verification,
-      id: crypto.randomUUID(),
-      actor,
-      verifiedAt: new Date().toISOString(),
-    });
-    const result = await context.var.engine.update(
-      item.id,
-      { verificationResults: [...item.verificationResults, verification] },
       body.expectedRevision,
       { actor, mutationId: mutationId(context.req.raw) },
     );

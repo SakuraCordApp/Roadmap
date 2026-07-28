@@ -8,14 +8,14 @@
     "applicationRepository": "/Users/super_original/Developer/My Own Projects/SakuraCord"
   },
   "branding": {
-    "primaryColor": "#F3A6C8",
-    "accentColor": "#D9578B",
-    "backgroundColor": "#0E0C13",
+    "primaryColor": "#EF9BC4",
+    "accentColor": "#CE6096",
+    "backgroundColor": "#0C0B10",
     "logoUrl": "/brand/app-icon.webp",
     "mobileLogoUrl": "/brand/mobile-logo.webp",
     "mobileLogoWidth": 1200,
     "mobileLogoHeight": 600,
-    "iconUrl": "/brand/icon.png"
+    "iconUrl": "/brand/favicon.png"
   },
   "deployment": {
     "workerName": "sakuracord-roadmap",

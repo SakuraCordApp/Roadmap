@@ -30,6 +30,10 @@ Migration `0005_report_job_recovery.sql` advances schema metadata to version 5
 and safely requeues unlinked report-analysis jobs that exhausted the earlier
 stale-lock retry loop.
 
+Migration `0006_streamline_roadmap_items.sql` advances schema metadata to version
+6, removes the obsolete difficulty column, and strips legacy planning fields
+from current items and audit history.
+
 ## Schema policy
 
 - Never edit an already-applied migration.

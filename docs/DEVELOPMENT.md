@@ -51,7 +51,7 @@ roadmap deploy --api-url https://roadmap.example.com
 
 ## Test areas
 
-Core tests cover configurable schemas, evidence-backed progress, transition
+Core tests cover configurable schemas, streamlined item validation, transition
 gates, stale revisions, and visible Discord hashing.
 
 D1 tests run the real migration, triggers, audit history, synchronization jobs,

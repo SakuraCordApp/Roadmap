@@ -44,7 +44,6 @@ export class D1RoadmapStorage implements RoadmapStorage {
     inClause("area", query.area);
     inClause("type", query.type);
     inClause("priority", query.priority);
-    inClause("difficulty", query.difficulty);
     if (query.search) {
       conditions.push(
         "(lower(title) LIKE ? OR lower(json_extract(document, '$.description')) LIKE ?)",
@@ -114,9 +113,9 @@ export class D1RoadmapStorage implements RoadmapStorage {
           this.db
             .prepare(
               `INSERT INTO roadmap_items (
-                id,title,type,area,status,priority,difficulty,revision,created_at,updated_at,
+                id,title,type,area,status,priority,revision,created_at,updated_at,
                 completed_at,document,actor_json,mutation_id,mutation_action,override_reason
-              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
             )
             .bind(
               item.id,
@@ -125,7 +124,6 @@ export class D1RoadmapStorage implements RoadmapStorage {
               item.area,
               item.status,
               item.priority,
-              item.difficulty,
               item.revision,
               item.createdAt,
               item.updatedAt,
@@ -193,7 +191,7 @@ export class D1RoadmapStorage implements RoadmapStorage {
       this.db
         .prepare(
           `UPDATE roadmap_items SET
-            title=?, type=?, area=?, status=?, priority=?, difficulty=?, revision=?,
+            title=?, type=?, area=?, status=?, priority=?, revision=?,
             updated_at=?, completed_at=?, document=?, actor_json=?, mutation_id=?,
             mutation_action=?, override_reason=?
           WHERE id=? AND revision=?`,
@@ -204,7 +202,6 @@ export class D1RoadmapStorage implements RoadmapStorage {
           item.area,
           item.status,
           item.priority,
-          item.difficulty,
           item.revision,
           item.updatedAt,
           item.completedAt ?? null,

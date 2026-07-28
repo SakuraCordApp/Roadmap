@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { attachmentReferences, buildAcceptanceCriteria } from "./report-analysis.js";
+import roadmapConfig from "../../../roadmap.config.js";
+import {
+  attachmentReferences,
+  buildAcceptanceCriteria,
+  reportAnalysisJsonSchema,
+} from "./report-analysis.js";
 
 describe("Discord report analysis helpers", () => {
   it("turns analyzer statements into independent unsatisfied acceptance criteria", () => {
@@ -32,5 +37,33 @@ describe("Discord report analysis helpers", () => {
         value: "image/png",
       },
     ]);
+  });
+
+  it("only asks the intake reviewer for fields supported by report evidence", () => {
+    const schema = reportAnalysisJsonSchema(roadmapConfig);
+    const fields = Object.keys(schema.properties);
+
+    expect(fields).toEqual([
+      "title",
+      "description",
+      "classification",
+      "priority",
+      "area",
+      "acceptanceCriteria",
+      "needsInformation",
+      "missingInformation",
+      "summary",
+      "relevantFollowUpMessageIds",
+    ]);
+    expect(fields).not.toEqual(
+      expect.arrayContaining([
+        "difficulty",
+        "confidence",
+        "proposedImplementation",
+        "affectedComponents",
+        "risks",
+        "requiredResearch",
+      ]),
+    );
   });
 });

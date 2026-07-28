@@ -27,6 +27,8 @@ describe("public and maintainer API", () => {
       "0002_release_automation.sql",
       "0003_report_automation.sql",
       "0004_reliable_jobs.sql",
+      "0005_report_job_recovery.sql",
+      "0006_streamline_roadmap_items.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration
@@ -56,7 +58,6 @@ describe("public and maintainer API", () => {
       area: "chat",
       status: "planned",
       priority: "critical",
-      difficulty: "large",
     };
     const created = await call("/api/v1/items", {
       method: "POST",
@@ -85,7 +86,7 @@ describe("public and maintainer API", () => {
       headers: mutationHeaders("api-update-polls"),
       body: JSON.stringify({
         expectedRevision: 1,
-        patch: { proposedImplementation: "Decode poll payloads before building native views." },
+        patch: { description: "Implement complete native polls support end to end." },
       }),
     });
     expect(updated.status).toBe(200);
@@ -111,7 +112,6 @@ describe("public and maintainer API", () => {
       area: "platform",
       status: "planned",
       priority: "medium",
-      difficulty: "medium",
     });
     const noAuth = await call("/api/v1/items", {
       method: "POST",

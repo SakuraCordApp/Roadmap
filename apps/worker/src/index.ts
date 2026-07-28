@@ -2,6 +2,7 @@ import { createApp } from "./app.js";
 import { processPendingInteractionJobs } from "./discord/interactions.js";
 import type { Env } from "./env.js";
 import { processPendingReleaseJobs } from "./release-automation.js";
+import { ensureCurrentSchema } from "./schema-migrations.js";
 
 const app = createApp();
 
@@ -10,6 +11,7 @@ export default {
   async scheduled(_controller: ScheduledController, env: Env, ctx: ExecutionContext) {
     ctx.waitUntil(
       (async () => {
+        await ensureCurrentSchema(env.DB);
         // Pending jobs are deliberately processed through the service rather
         // than by calling authenticated public mutation endpoints.
         const { RoadmapEngine } = await import("@roadmap/core");
