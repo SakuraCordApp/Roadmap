@@ -1,5 +1,5 @@
 import type { AcceptanceCriterion, EvidenceReference, RoadmapItem } from "@roadmap/core";
-import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { fetchItem, type PublicConfig } from "./api.js";
 import { type LoadState, toMessage } from "./load-state.js";
 import { kindLabel, priorityLabel } from "./public-fields.js";
@@ -35,9 +35,6 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
   const status = config.lifecycle.find((candidate) => candidate.id === value.status);
   const area = optionLabel(config.areas, value.area);
   const priority = priorityLabel(value.priority);
-  const detailStyle = {
-    "--status-color": status?.color ?? config.branding.primaryColor,
-  } as CSSProperties;
 
   const copyId = async () => {
     try {
@@ -58,7 +55,7 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
   };
 
   return (
-    <article className="detail-page" style={detailStyle}>
+    <article className="detail-page">
       <nav className="detail-breadcrumb" aria-label="Breadcrumb">
         <a className="back-link" href="/#browse">
           <ArrowLeftIcon />
@@ -66,55 +63,48 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
         </a>
       </nav>
 
-      <div className="detail-layout">
-        <main className="detail-record">
-          <header className="detail-masthead">
-            <div className="detail-identity">
-              <code>{value.id}</code>
-              <button
-                className="copy-id"
-                type="button"
-                onClick={() => void copyId()}
-                aria-label={copied ? "Roadmap item ID copied" : "Copy roadmap item ID"}
-              >
-                {copied ? <CheckIcon /> : <CopyIcon />}
-                <span>{copied ? "Copied" : "Copy ID"}</span>
-              </button>
-              <span className="copy-announcement" aria-live="polite">
-                {copied ? "Roadmap item ID copied" : ""}
-              </span>
-            </div>
+      <main className="detail-layout">
+        <header className="detail-masthead">
+          <div className="detail-identity">
+            <code>{value.id}</code>
+            <button
+              className="copy-id"
+              type="button"
+              onClick={() => void copyId()}
+              aria-label={copied ? "Roadmap item ID copied" : "Copy roadmap item ID"}
+            >
+              {copied ? <CheckIcon /> : <CopyIcon />}
+              <span>{copied ? "Copied" : "Copy ID"}</span>
+            </button>
+            <span className="copy-announcement" aria-live="polite">
+              {copied ? "Roadmap item ID copied" : ""}
+            </span>
+          </div>
 
-            <div className="detail-status">
-              <span aria-hidden="true" />
-              {status?.label ?? value.status}
-            </div>
+          <div className="detail-status">
+            <span aria-hidden="true" />
+            {status?.label ?? value.status}
+          </div>
 
-            <h1>{value.title}</h1>
-            <p className="detail-description">{value.description}</p>
-
-            {value.labels.length > 0 ? (
-              <ul className="detail-labels" aria-label="Labels">
-                {value.labels.map((label) => (
-                  <li key={label}>{label}</li>
-                ))}
-              </ul>
-            ) : null}
-          </header>
-
-          <DetailSections item={value} />
-        </main>
+          <h1>{value.title}</h1>
+          <p className="detail-description">{value.description}</p>
+        </header>
 
         <aside className="detail-sidebar" aria-label="Roadmap item details">
           <dl className="detail-fields">
             <DetailFact label="Priority" className={`priority priority--${priority.toLowerCase()}`}>
               {priority}
             </DetailFact>
-            <DetailFact label="Type">{kindLabel(value.type)}</DetailFact>
+            <DetailFact label="Kind">{kindLabel(value.type)}</DetailFact>
             <DetailFact label="Area">{area}</DetailFact>
+            {value.labels.length > 0 ? (
+              <DetailFact label="Type">{classificationLabel(value.labels)}</DetailFact>
+            ) : null}
           </dl>
         </aside>
-      </div>
+
+        <DetailSections item={value} />
+      </main>
     </article>
   );
 }
@@ -256,6 +246,10 @@ function optionLabel(options: Array<{ id: string; label: string }>, value: strin
   return options.find((option) => option.id === value)?.label ?? value;
 }
 
+function classificationLabel(labels: string[]) {
+  return labels.map((label) => `${label.charAt(0).toUpperCase()}${label.slice(1)}`).join(", ");
+}
+
 function ArrowLeftIcon() {
   return (
     <svg viewBox="0 0 18 18" fill="none" aria-hidden="true">
@@ -294,7 +288,7 @@ function DetailSkeleton() {
     <div className="detail-page detail-skeleton" aria-busy="true" aria-label="Loading change">
       <div className="skeleton detail-skeleton__back" />
       <div className="detail-layout">
-        <div className="detail-record">
+        <div className="detail-skeleton__record">
           <div className="skeleton detail-skeleton__id" />
           <div className="skeleton detail-skeleton__title" />
           <div className="skeleton detail-skeleton__body" />
