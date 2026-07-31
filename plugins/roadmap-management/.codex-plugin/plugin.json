@@ -1,6 +1,6 @@
 {
   "name": "roadmap-management",
-  "version": "0.1.0",
+  "version": "0.1.0+codex.20260731175159",
   "description": "Manage a canonical self-hosted engineering roadmap with revision-safe MCP tools.",
   "author": {
     "name": "SakuraCord contributors"

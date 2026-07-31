@@ -24,6 +24,12 @@ Never retry a conflict by guessing the latest revision.
 
 ## Creating items
 
+Do not create a new roadmap item unless the user explicitly asks you to create
+one. Do not infer permission from a feature request, repository finding, Discord
+submission, review, reconciliation, or other roadmap-related work. If a new item
+seems useful but the user has not requested it, suggest it and wait for explicit
+approval before calling `roadmap_create`.
+
 Use `roadmap_create` only after distinguishing a maintainer commitment from a
 community suggestion. New Discord forum submissions belong in the review inbox
 until an authorized maintainer accepts or links them.
