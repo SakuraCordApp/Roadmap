@@ -29,6 +29,7 @@ describe("public and maintainer API", () => {
       "0004_reliable_jobs.sql",
       "0005_report_job_recovery.sql",
       "0006_streamline_roadmap_items.sql",
+      "0007_recover_automation_jobs.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration

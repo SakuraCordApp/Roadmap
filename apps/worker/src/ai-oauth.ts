@@ -9,6 +9,7 @@ import { RoadmapError, type RoadmapConfig } from "@roadmap/core";
 import type { Env } from "./env.js";
 import { aiResponseModelOptions } from "./ai-request.js";
 import { decryptJson, encryptJson } from "./crypto-store.js";
+import { requeueAiAutomationJobs } from "./job-recovery.js";
 import { sha256 } from "./security.js";
 
 const SESSION_PURPOSE = "sakuracord-roadmap:ai-oauth-session:v1";
@@ -130,6 +131,7 @@ export async function finishAiOAuth(
   )
     .bind(encrypted.ciphertext, encrypted.iv, accountIdHash, session.expiresAt ?? null, now)
     .run();
+  await requeueAiAutomationJobs(env.DB);
   return { accountIdHash };
 }
 
@@ -198,6 +200,7 @@ export async function generateStructuredReleaseCopy(
   const response = await transport.request("/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
+    signal: AbortSignal.timeout(180_000),
     body: JSON.stringify({
       ...aiResponseModelOptions(config),
       stream: false,

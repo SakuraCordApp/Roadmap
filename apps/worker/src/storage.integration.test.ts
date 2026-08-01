@@ -5,7 +5,11 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { unstable_splitSqlQuery as splitSqlQuery } from "wrangler";
 import { RoadmapEngine } from "@roadmap/core";
 import roadmapConfig from "../../../roadmap.config.js";
-import { ensureCurrentSchema, STREAMLINE_MIGRATION_STATEMENTS } from "./schema-migrations.js";
+import {
+  ensureCurrentSchema,
+  RECOVERY_MIGRATION_STATEMENTS,
+  STREAMLINE_MIGRATION_STATEMENTS,
+} from "./schema-migrations.js";
 import { D1RoadmapStorage } from "./storage.js";
 
 describe("D1 canonical storage", () => {
@@ -19,15 +23,25 @@ describe("D1 canonical storage", () => {
       d1Databases: ["DB"],
     });
     db = (await miniflare.getD1Database("DB")) as unknown as D1Database;
-    for (const name of ["0001_initial.sql", "0006_streamline_roadmap_items.sql"]) {
-      const migration = await readFile(path.resolve("migrations", name), "utf8");
-      for (const statement of migration
-        .split(/;\n\n/)
-        .map((value) => value.trim())
-        .filter(Boolean)) {
-        await db.prepare(statement).run();
-      }
+    for (const name of [
+      "0001_initial.sql",
+      "0002_release_automation.sql",
+      "0003_report_automation.sql",
+      "0004_reliable_jobs.sql",
+      "0005_report_job_recovery.sql",
+      "0006_streamline_roadmap_items.sql",
+    ]) {
+      await applyMigration(db, name);
     }
+    await db
+      .prepare(
+        `CREATE TABLE d1_migrations (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          name TEXT,
+          applied_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )`,
+      )
+      .run();
   });
 
   afterEach(async () => {
@@ -38,6 +52,10 @@ describe("D1 canonical storage", () => {
     const initialMigration = await readFile(path.resolve("migrations/0001_initial.sql"), "utf8");
     const streamlineMigration = await readFile(
       path.resolve("migrations/0006_streamline_roadmap_items.sql"),
+      "utf8",
+    );
+    const recoveryMigration = await readFile(
+      path.resolve("migrations/0007_recover_automation_jobs.sql"),
       "utf8",
     );
     const statements = splitSqlQuery(initialMigration);
@@ -52,6 +70,9 @@ describe("D1 canonical storage", () => {
     expect(statements.at(-1)).toContain("INSERT OR REPLACE INTO schema_metadata");
     expect(splitSqlQuery(streamlineMigration).map(normalizeSql)).toEqual(
       STREAMLINE_MIGRATION_STATEMENTS.map(normalizeSql),
+    );
+    expect(splitSqlQuery(recoveryMigration).map(normalizeSql)).toEqual(
+      RECOVERY_MIGRATION_STATEMENTS.map(normalizeSql),
     );
   });
 
@@ -179,13 +200,82 @@ describe("D1 canonical storage", () => {
         const parsed = JSON.parse(stored!);
         expect(removedFields.every((field) => !(field in parsed))).toBe(true);
       }
-      const migration = await legacyDb
-        .prepare("SELECT name FROM d1_migrations")
-        .first<{ name: string }>();
-      expect(migration?.name).toBe("0006_streamline_roadmap_items.sql");
+      const migrations = await legacyDb
+        .prepare("SELECT name FROM d1_migrations ORDER BY id")
+        .all<{ name: string }>();
+      expect(migrations.results.map(({ name }) => name)).toEqual([
+        "0006_streamline_roadmap_items.sql",
+        "0007_recover_automation_jobs.sql",
+      ]);
     } finally {
       await legacyMiniflare.dispose();
     }
+  });
+
+  it("coalesces publishes and requeues recoverable Discord automation once", async () => {
+    await db
+      .prepare(
+        `INSERT INTO sync_jobs(job_key,kind,status,attempts,last_error)
+         VALUES
+           ('publish-1','publish_roadmap','failed',10,'Discord POST failed with 400.'),
+           ('publish-2','publish_roadmap','failed',10,'Discord POST failed with 400.'),
+           ('publish-3','publish_roadmap','failed',10,'Discord POST failed with 400.'),
+           ('sync-deleted','sync_item','failed',128,'Discord GET /channels/deleted failed with 404.')`,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO discord_submissions(
+           thread_id,forum_id,guild_id,kind,title,created_at,updated_at
+         ) VALUES ('bug-thread','bug-forum','guild','bug_report','Bug report',?1,?1)`,
+      )
+      .bind("2026-08-01T00:00:00.000Z")
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO discord_report_jobs(
+           thread_id,status,attempts,last_error,completed_at,rerun_requested
+         ) VALUES ('bug-thread','failed',10,'Report analysis exceeded its retry budget.',?1,1)`,
+      )
+      .bind("2026-08-01T01:00:00.000Z")
+      .run();
+
+    await ensureCurrentSchema(db);
+
+    const jobs = await db
+      .prepare("SELECT id,kind,status,attempts,last_error FROM sync_jobs ORDER BY id")
+      .all<{
+        id: number;
+        kind: string;
+        status: string;
+        attempts: number;
+        last_error: string | null;
+      }>();
+    expect(jobs.results).toEqual([
+      { id: 1, kind: "publish_roadmap", status: "complete", attempts: 10, last_error: null },
+      { id: 2, kind: "publish_roadmap", status: "complete", attempts: 10, last_error: null },
+      { id: 3, kind: "publish_roadmap", status: "pending", attempts: 0, last_error: null },
+      { id: 4, kind: "sync_item", status: "pending", attempts: 0, last_error: null },
+    ]);
+    const report = await db
+      .prepare(
+        `SELECT status,attempts,last_error,completed_at,rerun_requested
+         FROM discord_report_jobs WHERE thread_id='bug-thread'`,
+      )
+      .first<{
+        status: string;
+        attempts: number;
+        last_error: string | null;
+        completed_at: string | null;
+        rerun_requested: number;
+      }>();
+    expect(report).toEqual({
+      status: "pending",
+      attempts: 0,
+      last_error: null,
+      completed_at: null,
+      rerun_requested: 0,
+    });
   });
 
   it("records create/update history and synchronization work in the mutation batch", async () => {

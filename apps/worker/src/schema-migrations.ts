@@ -1,5 +1,6 @@
-const CURRENT_SCHEMA_VERSION = "6";
+const CURRENT_SCHEMA_VERSION = "7";
 const STREAMLINE_MIGRATION_NAME = "0006_streamline_roadmap_items.sql";
+const RECOVERY_MIGRATION_NAME = "0007_recover_automation_jobs.sql";
 
 export const STREAMLINE_MIGRATION_STATEMENTS = [
   "DROP INDEX IF EXISTS idx_roadmap_items_difficulty",
@@ -65,6 +66,57 @@ SET after_json = json_remove(
   "INSERT OR REPLACE INTO schema_metadata(key, value) VALUES ('schema_version', '6')",
 ] as const;
 
+export const RECOVERY_MIGRATION_STATEMENTS = [
+  `UPDATE sync_jobs
+SET status = 'complete',
+    completed_at = datetime('now'),
+    locked_at = NULL,
+    last_error = NULL
+WHERE kind = 'publish_roadmap'
+  AND status != 'complete'
+  AND id < (
+    SELECT COALESCE(MAX(id), 0)
+    FROM sync_jobs
+    WHERE kind = 'publish_roadmap'
+      AND status != 'complete'
+  )`,
+  `UPDATE sync_jobs
+SET status = 'pending',
+    attempts = 0,
+    available_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    locked_at = NULL,
+    completed_at = NULL,
+    last_error = NULL
+WHERE id = (
+  SELECT MAX(id)
+  FROM sync_jobs
+  WHERE kind = 'publish_roadmap'
+    AND status != 'complete'
+)`,
+  `UPDATE sync_jobs
+SET status = 'pending',
+    attempts = 0,
+    available_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    locked_at = NULL,
+    completed_at = NULL,
+    last_error = NULL
+WHERE kind = 'sync_item'
+  AND status = 'failed'
+  AND last_error LIKE 'Discord GET % failed with 404.%'`,
+  `UPDATE discord_report_jobs
+SET status = 'pending',
+    attempts = 0,
+    available_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now'),
+    locked_at = NULL,
+    completed_at = NULL,
+    last_error = NULL,
+    rerun_requested = 0
+WHERE linked_item_id IS NULL
+  AND status = 'failed'
+  AND attempts >= 10`,
+  "INSERT OR REPLACE INTO schema_metadata(key, value) VALUES ('schema_version', '7')",
+] as const;
+
 const schemaChecks = new WeakMap<D1Database, Promise<void>>();
 
 export function ensureCurrentSchema(db: D1Database): Promise<void> {
@@ -82,14 +134,15 @@ export function ensureCurrentSchema(db: D1Database): Promise<void> {
 async function migrateToCurrentSchema(db: D1Database): Promise<void> {
   const current = await readSchemaVersion(db);
   if (current === CURRENT_SCHEMA_VERSION) return;
-  if (current !== "5") {
+  if (current !== "5" && current !== "6") {
     throw new Error(
-      `Unsupported roadmap schema version ${current ?? "missing"}; expected 5 or ${CURRENT_SCHEMA_VERSION}.`,
+      `Unsupported roadmap schema version ${current ?? "missing"}; expected 5, 6, or ${CURRENT_SCHEMA_VERSION}.`,
     );
   }
 
-  try {
-    await db.batch([
+  const statements: D1PreparedStatement[] = [];
+  if (current === "5") {
+    statements.push(
       ...STREAMLINE_MIGRATION_STATEMENTS.map((statement) => db.prepare(statement)),
       db
         .prepare(
@@ -98,7 +151,21 @@ async function migrateToCurrentSchema(db: D1Database): Promise<void> {
            WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = ?1)`,
         )
         .bind(STREAMLINE_MIGRATION_NAME),
-    ]);
+    );
+  }
+  statements.push(
+    ...RECOVERY_MIGRATION_STATEMENTS.map((statement) => db.prepare(statement)),
+    db
+      .prepare(
+        `INSERT INTO d1_migrations(name)
+         SELECT ?1
+         WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = ?1)`,
+      )
+      .bind(RECOVERY_MIGRATION_NAME),
+  );
+
+  try {
+    await db.batch(statements);
   } catch (error) {
     // Another isolate may have completed the same transactional migration
     // while this request was waiting on D1's write serialization.

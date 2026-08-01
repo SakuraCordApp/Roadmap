@@ -160,4 +160,41 @@ describe("encrypted ChatGPT OAuth", () => {
     env.ROADMAP_OAUTH_ENCRYPTION_KEY = bytesToBase64Url(replacementKey);
     await expect(aiOAuthStatus(env)).resolves.toEqual({ connected: false });
   });
+
+  it("requeues unfinished report and release jobs after a successful reconnect", async () => {
+    const started = await beginAiOAuth(env);
+    expect(started.authorizationUrl).toContain("auth.openai.com");
+    await env.DB.prepare(
+      `INSERT INTO discord_submissions(
+        thread_id,forum_id,guild_id,kind,title,created_at,updated_at
+      ) VALUES('thread','forum','guild','bug_report','Broken preview',datetime('now'),datetime('now'))`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO discord_report_jobs(thread_id,status,attempts,last_error)
+       VALUES('thread','failed',10,'Report analysis exceeded its retry budget.')`,
+    ).run();
+    await env.DB.prepare(
+      `INSERT INTO release_jobs(
+        repository,release_id,tag_name,release_name,release_url,target_commitish,
+        published_at,payload_json,status,attempts,last_error
+      ) VALUES(
+        'SakuraCordApp/SakuraCord',10,'v1.2.0','SakuraCord 1.2',
+        'https://github.com/SakuraCordApp/SakuraCord/releases/tag/v1.2.0','main',
+        '2026-07-24T12:00:00Z','{}','failed',10,'ChatGPT authorization was rejected.'
+      )`,
+    ).run();
+
+    await finishAiOAuth(env, "authorization-code", "oauth-state");
+
+    await expect(
+      env.DB.prepare(
+        "SELECT status,attempts,locked_at,last_error FROM discord_report_jobs WHERE thread_id='thread'",
+      ).first(),
+    ).resolves.toEqual({ status: "pending", attempts: 0, locked_at: null, last_error: null });
+    await expect(
+      env.DB.prepare(
+        "SELECT status,attempts,locked_at,last_error FROM release_jobs WHERE release_id=10",
+      ).first(),
+    ).resolves.toEqual({ status: "pending", attempts: 0, locked_at: null, last_error: null });
+  });
 });

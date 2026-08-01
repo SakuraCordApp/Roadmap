@@ -10,6 +10,7 @@ import {
   attachmentContentFingerprint,
   combineUserReportText,
   componentsV2RoadmapBody,
+  componentsV2RoadmapEditBody,
   discordReportSourceRevision,
   DiscordSyncService,
   isReportEvidenceMessage,
@@ -191,6 +192,19 @@ describe("Discord Components V2 roadmap layout", () => {
     expect(planned.components?.[0]?.content).toContain("🪲 Bug Tracking");
     expect(JSON.stringify(body)).not.toContain("/items/");
     expect(countComponents(body.components)).toBeLessThanOrEqual(40);
+
+    const editBody = componentsV2RoadmapEditBody(projection, roadmapConfig, emojiIds) as Record<
+      string,
+      unknown
+    >;
+    expect(editBody).toMatchObject({
+      flags: 1 << 15,
+      content: null,
+      embeds: [],
+      attachments: [],
+      sticker_ids: [],
+      poll: null,
+    });
   });
 });
 

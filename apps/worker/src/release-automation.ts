@@ -2,6 +2,7 @@ import { RoadmapError, type RoadmapConfig } from "@roadmap/core";
 import type { Env } from "./env.js";
 import { DiscordRestClient } from "./discord/rest.js";
 import { generateStructuredReleaseCopy } from "./ai-oauth.js";
+import { isTerminalAiAuthorizationError, MAX_AUTOMATION_ATTEMPTS } from "./job-recovery.js";
 import { readBodyTextLimited, SIGNED_WEBHOOK_BODY_LIMIT } from "./request-body.js";
 import { constantTimeEqual, redactError, sha256 } from "./security.js";
 
@@ -140,30 +141,39 @@ export async function processPendingReleaseJobs(
   limit = 2,
 ): Promise<{ processed: number; failed: number }> {
   if (!config.releases.enabled) return { processed: 0, failed: 0 };
+  await env.DB.prepare(
+    `UPDATE release_jobs
+     SET status='failed',locked_at=NULL,
+         last_error=COALESCE(last_error,'Release automation exceeded its retry budget.')
+     WHERE status='processing' AND attempts >= ?
+       AND unixepoch(locked_at) <= unixepoch('now') - 300`,
+  )
+    .bind(MAX_AUTOMATION_ATTEMPTS)
+    .run();
   const jobs = await env.DB.prepare(
     `SELECT id,repository,release_id,tag_name,release_name,release_url,target_commitish,
       published_at,previous_tag,generated_json,github_updated_at,discord_message_id,attempts
      FROM release_jobs
-     WHERE attempts < 10 AND (
+     WHERE attempts < ? AND (
        (status IN ('pending','failed')
          AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
        OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
      )
      ORDER BY id LIMIT ?`,
   )
-    .bind(limit)
+    .bind(MAX_AUTOMATION_ATTEMPTS, limit)
     .all<ReleaseJob>();
   let processed = 0;
   let failed = 0;
   for (const job of jobs.results) {
     const locked = await env.DB.prepare(
       `UPDATE release_jobs SET status='processing',locked_at=?,attempts=attempts+1
-       WHERE id=? AND attempts < 10 AND (
+       WHERE id=? AND attempts < ? AND (
          status IN ('pending','failed')
          OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
        )`,
     )
-      .bind(new Date().toISOString(), job.id)
+      .bind(new Date().toISOString(), job.id, MAX_AUTOMATION_ATTEMPTS)
       .run();
     if (locked.meta.changes !== 1) continue;
     try {
@@ -176,12 +186,19 @@ export async function processPendingReleaseJobs(
         .run();
       processed += 1;
     } catch (error) {
+      const terminal = isTerminalAiAuthorizationError(error);
       const delay = Math.min(21_600, 2 ** Math.min(job.attempts + 2, 14));
       await env.DB.prepare(
-        `UPDATE release_jobs SET status='failed',last_error=?,
+        `UPDATE release_jobs SET status='failed',attempts=IIF(?=1,?,attempts),last_error=?,
           available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?),locked_at=NULL WHERE id=?`,
       )
-        .bind(redactError(error).slice(0, 2_000), `+${delay} seconds`, job.id)
+        .bind(
+          terminal ? 1 : 0,
+          MAX_AUTOMATION_ATTEMPTS,
+          redactError(error).slice(0, 2_000),
+          `+${delay} seconds`,
+          job.id,
+        )
         .run();
       failed += 1;
     }

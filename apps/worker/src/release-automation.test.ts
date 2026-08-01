@@ -7,11 +7,20 @@ import type { Env } from "./env.js";
 
 const aiHarness = vi.hoisted(() => ({
   calls: [] as unknown[],
+  missingAuthorization: false,
 }));
 
 vi.mock("./ai-oauth.js", () => ({
   generateStructuredReleaseCopy: vi.fn(async (...args: unknown[]) => {
     aiHarness.calls.push(args);
+    if (aiHarness.missingAuthorization) {
+      const { RoadmapError } = await import("@roadmap/core");
+      throw new RoadmapError(
+        "AI_OAUTH_REQUIRED",
+        "No ChatGPT account is connected. Run `roadmap releases connect-ai`.",
+        503,
+      );
+    }
     return {
       githubDescription:
         "## What changed\n\n- Added polished release automation.\n\n**Full Changelog:** [v1.1.0...v1.2.0](https://github.com/SakuraCordApp/SakuraCord/compare/v1.1.0...v1.2.0)",
@@ -32,6 +41,7 @@ describe("release automation", () => {
 
   beforeEach(async () => {
     aiHarness.calls.length = 0;
+    aiHarness.missingAuthorization = false;
     githubRequests.length = 0;
     discordRequests.length = 0;
     miniflare = new Miniflare({
@@ -170,6 +180,39 @@ describe("release automation", () => {
     expect(stored?.status).toBe("complete");
     expect(stored?.github_updated_at).toBeTruthy();
     expect(stored?.discord_message_id).toBe("99999999999999999");
+  });
+
+  it("stops retrying a release when ChatGPT is not connected", async () => {
+    const body = JSON.stringify({
+      action: "published",
+      release: {
+        id: 10,
+        tag_name: "v1.2.0",
+        name: "SakuraCord 1.2",
+        html_url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v1.2.0",
+        target_commitish: "main",
+        published_at: "2026-07-24T12:00:00Z",
+        draft: false,
+      },
+      repository: { full_name: "SakuraCordApp/SakuraCord" },
+    });
+    await acceptGithubReleaseWebhook(await signedWebhook(body), env, roadmapConfig);
+    aiHarness.missingAuthorization = true;
+
+    await expect(processPendingReleaseJobs(env, roadmapConfig, 1)).resolves.toEqual({
+      processed: 0,
+      failed: 1,
+    });
+    await expect(
+      env.DB.prepare(
+        "SELECT status,attempts,locked_at,last_error FROM release_jobs WHERE release_id=10",
+      ).first(),
+    ).resolves.toMatchObject({
+      status: "failed",
+      attempts: 10,
+      locked_at: null,
+      last_error: "No ChatGPT account is connected. Run `roadmap releases connect-ai`.",
+    });
   });
 
   async function signedWebhook(body: string): Promise<Request> {

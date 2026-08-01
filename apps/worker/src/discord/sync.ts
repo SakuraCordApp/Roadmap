@@ -1,5 +1,6 @@
 import {
   CreateRoadmapItemSchema,
+  RoadmapError,
   RoadmapItemSchema,
   escapeDiscord,
   generateDiscordProjection,
@@ -16,6 +17,7 @@ import {
   type DiscordReportAttachment,
 } from "../report-analysis.js";
 import { redactError, sha256 } from "../security.js";
+import { isTerminalAiAuthorizationError, MAX_AUTOMATION_ATTEMPTS } from "../job-recovery.js";
 import {
   applyRoadmapTags,
   ensureForumTaxonomy,
@@ -111,11 +113,14 @@ export class DiscordSyncService {
       try {
         const edited = await rest.patch<{ id: string }>(
           `/channels/${channelId}/messages/${messageId}`,
-          body,
+          this.config.discord.enableComponentsV2
+            ? componentsV2RoadmapEditBody(projection, this.config, emojiIds)
+            : body,
           "Update canonical roadmap projection",
         );
         messageId = edited.id;
-      } catch {
+      } catch (error) {
+        if (!isDiscordStatus(error, 404)) throw error;
         messageId = undefined;
       }
     }
@@ -171,19 +176,21 @@ export class DiscordSyncService {
       `UPDATE discord_report_jobs
        SET status='failed',locked_at=NULL,
            last_error=COALESCE(last_error,'Report analysis exceeded its retry budget.')
-       WHERE status='processing' AND attempts >= 10
+       WHERE status='processing' AND attempts >= ?
          AND unixepoch(locked_at) <= unixepoch('now') - 300`,
-    ).run();
+    )
+      .bind(MAX_AUTOMATION_ATTEMPTS)
+      .run();
     const jobs = await this.env.DB.prepare(
       `SELECT id,thread_id,attempts FROM discord_report_jobs
-       WHERE attempts < 10 AND (
+       WHERE attempts < ? AND (
          (status IN ('pending','failed')
            AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
          OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
        )
        ORDER BY id LIMIT ?`,
     )
-      .bind(Math.min(Math.max(limit, 1), 10))
+      .bind(MAX_AUTOMATION_ATTEMPTS, Math.min(Math.max(limit, 1), MAX_AUTOMATION_ATTEMPTS))
       .all<{ id: number; thread_id: string; attempts: number }>();
     let processed = 0;
     let failed = 0;
@@ -191,12 +198,12 @@ export class DiscordSyncService {
       const locked = await this.env.DB.prepare(
         `UPDATE discord_report_jobs
          SET status='processing',locked_at=datetime('now'),attempts=attempts+1
-         WHERE id=? AND attempts < 10 AND (
+         WHERE id=? AND attempts < ? AND (
            status IN ('pending','failed')
            OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
          )`,
       )
-        .bind(job.id)
+        .bind(job.id, MAX_AUTOMATION_ATTEMPTS)
         .run();
       if (locked.meta.changes !== 1) continue;
       try {
@@ -224,14 +231,21 @@ export class DiscordSyncService {
           .run();
         processed += 1;
       } catch (error) {
+        const terminal = isTerminalAiAuthorizationError(error);
         const delay = Math.min(3_600, 2 ** Math.min(job.attempts + 1, 10));
         await this.env.DB.prepare(
           `UPDATE discord_report_jobs
-           SET status='failed',last_error=?,
+           SET status='failed',attempts=IIF(?=1,?,attempts),last_error=?,
                available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?),locked_at=NULL
            WHERE id=?`,
         )
-          .bind(redactError(error).slice(0, 2_000), `+${delay} seconds`, job.id)
+          .bind(
+            terminal ? 1 : 0,
+            MAX_AUTOMATION_ATTEMPTS,
+            redactError(error).slice(0, 2_000),
+            `+${delay} seconds`,
+            job.id,
+          )
           .run();
         failed += 1;
       }
@@ -243,7 +257,13 @@ export class DiscordSyncService {
     const rest = this.requireRest();
     const item = await this.engine.get(itemId);
     for (const thread of item.linkedDiscordThreads) {
-      const current = await rest.get<DiscordThread>(`/channels/${thread.threadId}`);
+      let current: DiscordThread;
+      try {
+        current = await rest.get<DiscordThread>(`/channels/${thread.threadId}`);
+      } catch (error) {
+        if (isDiscordStatus(error, 404)) continue;
+        throw error;
+      }
       const appliedTags = await applyRoadmapTags(rest, this.config, current, item);
       const terminal = ["done", "declined", "duplicate"].includes(item.status);
       await rest.patch(
@@ -342,6 +362,7 @@ export class DiscordSyncService {
   }
 
   async processPendingJobs(limit = 20): Promise<{ processed: number; failed: number }> {
+    await this.coalesceRoadmapPublishJobs();
     const jobs = await this.env.DB.prepare(
       `SELECT id,kind,item_id,attempts FROM sync_jobs
        WHERE attempts < 10 AND (
@@ -901,6 +922,27 @@ export class DiscordSyncService {
       .run();
   }
 
+  private async coalesceRoadmapPublishJobs(): Promise<void> {
+    await this.env.DB.prepare(
+      `UPDATE sync_jobs
+       SET status='complete',completed_at=datetime('now'),locked_at=NULL,last_error=NULL
+       WHERE kind='publish_roadmap' AND status!='complete'
+         AND id < (
+           SELECT COALESCE(MAX(id),0) FROM sync_jobs
+           WHERE kind='publish_roadmap' AND status!='complete'
+         )`,
+    ).run();
+    await this.env.DB.prepare(
+      `UPDATE sync_jobs
+       SET status='failed',locked_at=NULL,
+           last_error=COALESCE(last_error,'Synchronization exceeded its retry budget.')
+       WHERE status='processing' AND attempts >= ?
+         AND unixepoch(locked_at) <= unixepoch('now') - 300`,
+    )
+      .bind(MAX_AUTOMATION_ATTEMPTS)
+      .run();
+  }
+
   private statusLabel(status: string): string {
     return this.config.lifecycle.find((state) => state.id === status)?.label ?? status;
   }
@@ -985,6 +1027,21 @@ export function componentsV2RoadmapBody(
     },
   ];
   return { flags: 1 << 15, components, allowed_mentions: safeAllowedMentions() };
+}
+
+export function componentsV2RoadmapEditBody(
+  projection: Awaited<ReturnType<typeof generateDiscordProjection>>,
+  config: RoadmapConfig,
+  emojiIds: Map<string, string> = new Map(),
+) {
+  return {
+    ...componentsV2RoadmapBody(projection, config, emojiIds),
+    content: null,
+    embeds: [],
+    attachments: [],
+    sticker_ids: [],
+    poll: null,
+  };
 }
 
 export function combineUserReportText(
@@ -1093,6 +1150,17 @@ function customEmoji(key: string, emojiIds: Map<string, string>): string {
 
 function colorValue(color: string): number {
   return Number.parseInt(color.slice(1), 16);
+}
+
+function isDiscordStatus(error: unknown, status: number): boolean {
+  if (!(error instanceof RoadmapError) || error.code !== "DISCORD_API_ERROR") return false;
+  const details = error.details;
+  return Boolean(
+    details &&
+    typeof details === "object" &&
+    "status" in details &&
+    (details as { status?: unknown }).status === status,
+  );
 }
 
 function sanitizeText(value: string, max: number): string {
