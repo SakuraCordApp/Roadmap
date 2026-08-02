@@ -73,7 +73,8 @@ describe("version roadmap projection", () => {
     expect(text).not.toContain("Current release");
     expect(text).not.toContain("Up next");
     expect(text).toContain("◉ v0\\.1\\.0");
-    expect(text).toContain("│ **Timeline improvements**");
+    expect(text).toContain("│ Timeline improvements");
+    expect(text).not.toContain("**Timeline improvements**");
   });
 });
 

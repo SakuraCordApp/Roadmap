@@ -136,9 +136,7 @@ export async function generateVersionRoadmapProjection(
 
 export function renderVersionDiscordText(projection: VersionRoadmapProjection): string {
   const versions = projection.versions.map((version) => {
-    const highlights = version.highlights.map(
-      (highlight) => `│ **${escapeDiscord(highlight.title)}**`,
-    );
+    const highlights = version.highlights.map((highlight) => `│ ${escapeDiscord(highlight.title)}`);
     return `## ◉ v${escapeDiscord(version.version)} — ${escapeDiscord(version.title)}\n${
       highlights.length ? highlights.join("\n") : "_Highlights are being prepared._"
     }`;

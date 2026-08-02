@@ -995,7 +995,7 @@ export function componentsV2RoadmapBody(
     const dot = discordRoadmapEmoji("sakura_roadmap_dot", emojiIds.dot, "◉");
     const line = discordRoadmapEmoji("sakura_roadmap_line", emojiIds.line, "│");
     const highlights = version.highlights.map(
-      (highlight) => `${line} **${escapeDiscord(highlight.title)}**`,
+      (highlight) => `${line} ${escapeDiscord(highlight.title)}`,
     );
     return {
       type: 17,
