@@ -60,6 +60,14 @@ describe("one-shot Discord runtime completion", () => {
       if (url.pathname === "/api/v1/discord/publish") {
         return Response.json({ data: { changed: true, messageId: "88888888888888888" } });
       }
+      if (url.pathname === "/api/v1/discord/roadmap-emojis/configure") {
+        return Response.json({
+          data: [
+            { key: "line", id: "77777777777777771", name: "sakura_roadmap_line" },
+            { key: "dot", id: "77777777777777772", name: "sakura_roadmap_dot" },
+          ],
+        });
+      }
       if (url.pathname === "/api/v1/reconcile") {
         return Response.json({ data: { threads: 3, messages: 12, errors: [] } });
       }
@@ -90,6 +98,7 @@ describe("one-shot Discord runtime completion", () => {
 
     expect(requests.map((request) => request.path)).toEqual([
       "/api/v1/discord/forums/configure",
+      "/api/v1/discord/roadmap-emojis/configure",
       "/api/v1/discord/publish",
       "/api/v1/reconcile",
       "/api/v1/discord/gateway/start",
@@ -105,6 +114,7 @@ describe("one-shot Discord runtime completion", () => {
       await readFile(path.join(temporaryRoot, ".roadmap/setup-state.json"), "utf8"),
     );
     expect(state.discord_projection.status).toBe("complete");
+    expect(state.discord_roadmap_emojis.status).toBe("complete");
     expect(state.discord_reconciliation.detail).toContain("3 threads");
     expect(state.discord_gateway.detail).toContain("cloudflare-scheduled-reconciliation");
   });
@@ -124,6 +134,14 @@ describe("one-shot Discord runtime completion", () => {
       }
       if (path === "/api/v1/discord/publish") {
         return Response.json({ data: { changed: true, messageId: "88888888888888888" } });
+      }
+      if (path === "/api/v1/discord/roadmap-emojis/configure") {
+        return Response.json({
+          data: [
+            { key: "line", id: "77777777777777771", name: "sakura_roadmap_line" },
+            { key: "dot", id: "77777777777777772", name: "sakura_roadmap_dot" },
+          ],
+        });
       }
       if (path === "/api/v1/reconcile") {
         return Response.json({

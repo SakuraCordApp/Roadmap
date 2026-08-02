@@ -34,6 +34,13 @@ Migration `0006_streamline_roadmap_items.sql` advances schema metadata to versio
 6, removes the obsolete difficulty column, and strips legacy planning fields
 from current items and audit history.
 
+Migration `0007_recover_automation_jobs.sql` advances schema metadata to version
+7 and safely recovers stale Discord publication and report-analysis work.
+
+Migration `0008_version_roadmap.sql` advances schema metadata to version 8 and
+adds the separate version roadmap plus its immutable revision history. Existing
+Tracker items, Discord submissions, and forum synchronization remain unchanged.
+
 ## Schema policy
 
 - Never edit an already-applied migration.

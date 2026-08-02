@@ -14,7 +14,7 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
     fetchItem(id, controller.signal)
       .then((value) => {
         setItem({ state: "ready", value });
-        document.title = `${value.title} | ${config.project.name} Roadmap`;
+        document.title = `${value.title} | ${config.project.name} Tracker`;
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) setItem({ state: "error", message: toMessage(error) });
@@ -59,7 +59,7 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
       <nav className="detail-breadcrumb" aria-label="Breadcrumb">
         <a className="back-link" href="/#browse">
           <ArrowLeftIcon />
-          Roadmap
+          Tracker
         </a>
       </nav>
 
@@ -71,13 +71,13 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
               className="copy-id"
               type="button"
               onClick={() => void copyId()}
-              aria-label={copied ? "Roadmap item ID copied" : "Copy roadmap item ID"}
+              aria-label={copied ? "Tracker item ID copied" : "Copy tracker item ID"}
             >
               {copied ? <CheckIcon /> : <CopyIcon />}
               <span>{copied ? "Copied" : "Copy ID"}</span>
             </button>
             <span className="copy-announcement" aria-live="polite">
-              {copied ? "Roadmap item ID copied" : ""}
+              {copied ? "Tracker item ID copied" : ""}
             </span>
           </div>
 
@@ -90,7 +90,7 @@ export function ItemDetail({ config, id }: { config: PublicConfig; id: string })
           <p className="detail-description">{value.description}</p>
         </header>
 
-        <aside className="detail-sidebar" aria-label="Roadmap item details">
+        <aside className="detail-sidebar" aria-label="Tracker item details">
           <dl className="detail-fields">
             <DetailFact label="Priority" className={`priority priority--${priority.toLowerCase()}`}>
               {priority}

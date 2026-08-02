@@ -2,14 +2,16 @@ import {
   CreateRoadmapItemSchema,
   RoadmapError,
   RoadmapItemSchema,
+  RoadmapVersionEngine,
   escapeDiscord,
-  generateDiscordProjection,
-  renderDiscordText,
+  generateVersionRoadmapProjection,
+  renderVersionDiscordText,
   type RoadmapConfig,
   type RoadmapEngine,
   type RoadmapItem,
 } from "@roadmap/core";
 import type { Env } from "../env.js";
+import { D1RoadmapStorage } from "../storage.js";
 import {
   analyzeDiscordReport,
   attachmentReferences,
@@ -21,7 +23,9 @@ import { isTerminalAiAuthorizationError, MAX_AUTOMATION_ATTEMPTS } from "../job-
 import {
   applyRoadmapTags,
   ensureForumTaxonomy,
+  ensureRoadmapTimelineEmojis,
   resolveAppliedTagNames,
+  type RoadmapEmojiPayloads,
   type TagIconPayloads,
 } from "./forums.js";
 import { DiscordRestClient, safeAllowedMentions } from "./rest.js";
@@ -60,11 +64,6 @@ interface ArchivedThreadsResponse {
   has_more: boolean;
 }
 
-interface DiscordEmoji {
-  id: string;
-  name: string;
-}
-
 interface ThreadMessageCheckpoint {
   lastMessageId: string | null;
   checkedAt: string;
@@ -74,6 +73,7 @@ const ACTIVE_THREAD_FULL_REFRESH_MS = 60 * 60 * 1_000;
 
 export class DiscordSyncService {
   private readonly rest: DiscordRestClient | null;
+  private readonly versionEngine: RoadmapVersionEngine;
 
   constructor(
     private readonly env: Env,
@@ -81,6 +81,7 @@ export class DiscordSyncService {
     private readonly engine: RoadmapEngine,
   ) {
     this.rest = env.DISCORD_BOT_TOKEN ? new DiscordRestClient(env.DISCORD_BOT_TOKEN) : null;
+    this.versionEngine = new RoadmapVersionEngine(new D1RoadmapStorage(env.DB), config);
   }
 
   async publishRoadmap(force = false): Promise<{
@@ -91,21 +92,22 @@ export class DiscordSyncService {
     const rest = this.requireRest();
     const channelId = this.config.discord.roadmapChannelId;
     if (!channelId) throw new Error("discord.roadmapChannelId is not configured.");
-    const items = await this.allItems();
-    const projection = await generateDiscordProjection(items, this.config);
+    const versions = await this.versionEngine.list({
+      states: ["released", "planned"],
+      limit: 50,
+    });
+    const projection = await generateVersionRoadmapProjection(versions);
+    const emojiIds = await this.roadmapEmojiIds();
     const previousHash = await this.getState("roadmap_projection_hash");
     const configuredMessageId =
       (await this.getState("roadmap_message_id")) ?? this.config.discord.roadmapMessageId;
     if (!force && previousHash === projection.hash && configuredMessageId) {
       return { changed: false, hash: projection.hash, messageId: configuredMessageId };
     }
-    const emojiIds = this.config.discord.enableComponentsV2
-      ? await this.tagEmojiIds(rest)
-      : new Map<string, string>();
     const body = this.config.discord.enableComponentsV2
       ? componentsV2RoadmapBody(projection, this.config, emojiIds)
       : {
-          content: renderDiscordText(projection),
+          content: renderVersionDiscordText(projection),
           allowed_mentions: safeAllowedMentions(),
         };
     let messageId = configuredMessageId;
@@ -140,6 +142,30 @@ export class DiscordSyncService {
 
   async configureForums(iconPayloads: TagIconPayloads = {}, replaceIconKeys: string[] = []) {
     return ensureForumTaxonomy(this.requireRest(), this.config, iconPayloads, replaceIconKeys);
+  }
+
+  async configureRoadmapEmojis(payloads: RoadmapEmojiPayloads, replaceKeys: string[] = []) {
+    const emojis = await ensureRoadmapTimelineEmojis(
+      this.requireRest(),
+      this.config,
+      payloads,
+      new Set(replaceKeys),
+    );
+    await Promise.all(
+      emojis.map((emoji) => this.setState(`roadmap_emoji_${emoji.key}_id`, emoji.id)),
+    );
+    if (emojis.length) {
+      await this.env.DB.prepare(
+        `INSERT OR IGNORE INTO sync_jobs (job_key,kind,payload)
+         VALUES (?,?,'{}')`,
+      )
+        .bind(
+          `roadmap-emojis:${emojis.map((emoji) => `${emoji.key}:${emoji.id}`).join(",")}`,
+          "publish_roadmap",
+        )
+        .run();
+    }
+    return emojis;
   }
 
   async reportAutomationStatus(): Promise<{
@@ -922,6 +948,14 @@ export class DiscordSyncService {
       .run();
   }
 
+  private async roadmapEmojiIds(): Promise<RoadmapTimelineEmojiIds> {
+    const [line, dot] = await Promise.all([
+      this.getState("roadmap_emoji_line_id"),
+      this.getState("roadmap_emoji_dot_id"),
+    ]);
+    return { ...(line ? { line } : {}), ...(dot ? { dot } : {}) };
+  }
+
   private async coalesceRoadmapPublishJobs(): Promise<void> {
     await this.env.DB.prepare(
       `UPDATE sync_jobs
@@ -950,52 +984,45 @@ export class DiscordSyncService {
   private priorityLabel(priority: string): string {
     return this.config.priorities.find((value) => value.id === priority)?.label ?? priority;
   }
-
-  private async tagEmojiIds(rest: DiscordRestClient): Promise<Map<string, string>> {
-    const guildId = this.config.discord.guildId;
-    if (!guildId) return new Map();
-    const emojis = await rest.get<DiscordEmoji[]>(`/guilds/${guildId}/emojis`);
-    return new Map(
-      emojis
-        .filter((emoji) => emoji.name.startsWith("sakura_tag_"))
-        .map((emoji) => [emoji.name.slice("sakura_tag_".length), emoji.id]),
-    );
-  }
 }
 
 export function componentsV2RoadmapBody(
-  projection: Awaited<ReturnType<typeof generateDiscordProjection>>,
+  projection: Awaited<ReturnType<typeof generateVersionRoadmapProjection>>,
   config: RoadmapConfig,
-  emojiIds: Map<string, string> = new Map(),
+  emojiIds: RoadmapTimelineEmojiIds = {},
 ) {
-  const statusContainers = config.publicSections.map((publicSection) => {
-    const statusId = publicSection.statuses[0] ?? publicSection.id;
-    const status = config.lifecycle.find((value) => value.id === statusId);
-    const statusEmoji = customEmoji(statusId, emojiIds);
-    const groupContent = projection.groups
-      .map((group) => {
-        const section = group.sections.find((value) => value.id === publicSection.id);
-        const groupEmoji = group.id === "feature" ? "💡" : group.id === "bug" ? "🪲" : "•";
-        const lines = (section?.items ?? []).map((item) => {
-          const priorityEmoji = customEmoji(item.priority, emojiIds);
-          return `${priorityEmoji ? `${priorityEmoji} ` : "• "}**${escapeDiscord(item.title)}**`;
-        });
-        return `### ${groupEmoji} ${escapeDiscord(group.label)}\n${
-          lines.length ? lines.join("\n") : "_Nothing here yet._"
-        }`;
-      })
-      .join("\n\n");
+  const versionContainers = projection.versions.map((version) => {
+    const dot = discordRoadmapEmoji("sakura_roadmap_dot", emojiIds.dot, "◉");
+    const line = discordRoadmapEmoji("sakura_roadmap_line", emojiIds.line, "│");
+    const highlights = version.highlights.map(
+      (highlight) => `${line} **${escapeDiscord(highlight.title)}**`,
+    );
     return {
       type: 17,
-      accent_color: colorValue(status?.color ?? config.branding.accentColor),
+      accent_color: colorValue(config.branding.primaryColor),
       components: [
         {
           type: 10,
-          content: `## ${statusEmoji ? `${statusEmoji} ` : ""}${escapeDiscord(publicSection.label)}\n${groupContent}`,
+          content: `## ${dot} v${escapeDiscord(version.version)} — ${escapeDiscord(version.title)}\n${
+            highlights.length ? highlights.join("\n") : "_Highlights are being prepared._"
+          }`,
         },
       ],
     };
   });
+  if (versionContainers.length === 0) {
+    versionContainers.push({
+      type: 17,
+      accent_color: colorValue(config.branding.primaryColor),
+      components: [
+        {
+          type: 10,
+          content:
+            "## The next version plan is being prepared.\nCheck back soon for a focused view of what comes next.",
+        },
+      ],
+    });
+  }
   const components: unknown[] = [
     {
       type: 17,
@@ -1003,20 +1030,30 @@ export function componentsV2RoadmapBody(
       components: [
         {
           type: 10,
-          content: `# ${escapeDiscord(config.project.name)} Roadmap\nFeatures and fixes, grouped by delivery stage.`,
+          content: `# ${escapeDiscord(config.project.name)} Roadmap`,
         },
       ],
     },
-    ...statusContainers,
+    ...versionContainers,
     {
       type: 1,
       components: [
         {
           type: 2,
           style: 5,
-          label: "Open detailed roadmap",
+          label: "Open roadmap",
           url: config.project.publicUrl,
         },
+        ...(config.project.trackerUrl
+          ? [
+              {
+                type: 2,
+                style: 5,
+                label: "Detailed tracker",
+                url: config.project.trackerUrl,
+              },
+            ]
+          : []),
         {
           type: 2,
           style: 2,
@@ -1030,9 +1067,9 @@ export function componentsV2RoadmapBody(
 }
 
 export function componentsV2RoadmapEditBody(
-  projection: Awaited<ReturnType<typeof generateDiscordProjection>>,
+  projection: Awaited<ReturnType<typeof generateVersionRoadmapProjection>>,
   config: RoadmapConfig,
-  emojiIds: Map<string, string> = new Map(),
+  emojiIds: RoadmapTimelineEmojiIds = {},
 ) {
   return {
     ...componentsV2RoadmapBody(projection, config, emojiIds),
@@ -1042,6 +1079,15 @@ export function componentsV2RoadmapEditBody(
     sticker_ids: [],
     poll: null,
   };
+}
+
+export interface RoadmapTimelineEmojiIds {
+  line?: string;
+  dot?: string;
+}
+
+function discordRoadmapEmoji(name: string, id: string | undefined, fallback: string): string {
+  return id ? `<:${name}:${id}>` : fallback;
 }
 
 export function combineUserReportText(
@@ -1141,11 +1187,6 @@ export function reportCreatedContent(
     `**${escapeDiscord(analysis.title)}**`,
     `Classification: **${analysis.classification === "visual" ? "Visual" : "Functionality"}** · Priority: **${escapeDiscord(priorityLabel)}** · Status: **Planned**`,
   ].join("\n");
-}
-
-function customEmoji(key: string, emojiIds: Map<string, string>): string {
-  const id = emojiIds.get(key);
-  return id ? `<:sakura_tag_${key}:${id}>` : "";
 }
 
 function colorValue(color: string): number {

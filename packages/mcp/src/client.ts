@@ -1,8 +1,11 @@
 import type {
   AcceptanceCriterion,
   CreateRoadmapItem,
+  CreateRoadmapVersion,
   DiscordThreadLink,
   RoadmapPatch,
+  RoadmapVersionPatch,
+  RoadmapVersionState,
 } from "@roadmap/core";
 
 export class RoadmapApiClient {
@@ -75,6 +78,14 @@ export class RoadmapApiClient {
     return this.request("/api/v1/discord/projection");
   }
 
+  publishVersionRoadmap(force = false) {
+    return this.request("/api/v1/discord/publish", {
+      method: "POST",
+      body: { force },
+      mutation: true,
+    });
+  }
+
   validate(item: unknown) {
     return this.request("/api/v1/validate", { method: "POST", body: item });
   }
@@ -92,6 +103,57 @@ export class RoadmapApiClient {
     if (itemId) query.set("itemId", itemId);
     if (since) query.set("since", since);
     return this.request(`/api/v1/history?${query}`);
+  }
+
+  listVersions(state?: RoadmapVersionState) {
+    const query = new URLSearchParams();
+    if (state) query.set("state", state);
+    return this.request(`/api/v1/manage/versions?${query}`);
+  }
+
+  getVersion(id: string) {
+    return this.request(`/api/v1/manage/versions/${encodeURIComponent(id)}`);
+  }
+
+  createVersion(version: CreateRoadmapVersion) {
+    return this.request("/api/v1/versions", {
+      method: "POST",
+      body: version,
+      mutation: true,
+    });
+  }
+
+  updateVersion(
+    id: string,
+    expectedRevision: number,
+    patch: RoadmapVersionPatch,
+    overrideReason?: string,
+  ) {
+    return this.request(`/api/v1/versions/${encodeURIComponent(id)}`, {
+      method: "PATCH",
+      body: { expectedRevision, patch, ...(overrideReason ? { overrideReason } : {}) },
+      mutation: true,
+    });
+  }
+
+  transitionVersion(
+    id: string,
+    expectedRevision: number,
+    to: RoadmapVersionState,
+    options: { releaseUrl?: string; releasedAt?: string; overrideReason?: string } = {},
+  ) {
+    return this.request(`/api/v1/versions/${encodeURIComponent(id)}/transition`, {
+      method: "POST",
+      body: { expectedRevision, to, ...options },
+      mutation: true,
+    });
+  }
+
+  versionHistory(versionId?: string, since?: string, limit = 100) {
+    const query = new URLSearchParams({ limit: String(limit) });
+    if (versionId) query.set("versionId", versionId);
+    if (since) query.set("since", since);
+    return this.request(`/api/v1/manage/version-history?${query}`);
   }
 
   private async request(

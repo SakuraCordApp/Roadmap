@@ -41,7 +41,24 @@ Response:
 
 ### `GET /api/v1/items/:id`
 
-Returns the complete public roadmap document.
+Returns the complete public Tracker document.
+
+### `GET /api/v1/versions`
+
+Returns public `planned` and released version records. The website and Discord
+projection intentionally render only the planned future releases.
+
+### `GET /api/v1/versions/events`
+
+Returns a short Server-Sent Events snapshot and asks `EventSource` clients to
+reconnect every five seconds. The public website consumes this stream without a
+page reload, and also revalidates immediately when the tab regains focus or the
+device comes back online.
+
+### `GET /api/v1/versions/:id`
+
+Returns a public planned or released version, including its ordered highlights
+and optional links to detailed Tracker item IDs.
 
 ### `GET /api/v1/history`
 
@@ -59,8 +76,7 @@ Validates a complete item without mutating.
 
 ### `GET /api/v1/discord/projection`
 
-Returns the feature-name-only projection and visible SHA-256 hash. It does not
-publish.
+Returns the version roadmap projection and visible SHA-256 hash. It does not publish.
 
 ### `GET /api/v1/sync/status`
 
@@ -121,6 +137,22 @@ Status is rejected here; use the transition endpoint.
 - `POST /api/v1/items/:id/acceptance-criteria`
 
 Each body includes `expectedRevision`.
+
+### Version roadmap mutations
+
+- `GET /api/v1/manage/versions`
+- `GET /api/v1/manage/versions/:id`
+- `GET /api/v1/manage/version-history`
+- `POST /api/v1/versions`
+- `PATCH /api/v1/versions/:id`
+- `POST /api/v1/versions/:id/transition`
+- `POST /api/v1/discord/roadmap-emojis/configure`
+
+Versions move through `draft`, `planned`, `released`, and `cancelled`. Publishing
+a version as planned requires at least one highlight unless the maintainer
+records an explicit override reason. Updates and transitions require the exact
+current `expectedRevision`, just like Tracker items. A matching GitHub release
+automatically moves a planned version to released and attaches its release URL.
 
 ### Operational mutations
 

@@ -10,7 +10,7 @@ import {
 } from "./public-fields.js";
 import { InlineError, RoadmapSkeleton } from "./ui.js";
 
-export function RoadmapOverview({ config }: { config: PublicConfig }) {
+export function TrackerOverview({ config }: { config: PublicConfig }) {
   const [items, setItems] = useState<LoadState<RoadmapItem[]>>({ state: "loading" });
   const [initialFilters] = useState(() => readFiltersFromUrl(config));
   const [search, setSearch] = useState(initialFilters.search);
@@ -73,31 +73,17 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
 
   return (
     <>
-      <section className="overview-hero" aria-labelledby="roadmap-title">
-        <div className="overview-hero__copy">
-          <h1 id="roadmap-title" aria-label={`${config.project.name} Roadmap`}>
-            <span className="overview-hero__name" translate="no">
-              {config.project.name}
-            </span>
-            <span className="overview-hero__context">Roadmap</span>
-          </h1>
-          <p>
-            A clear view of new reports, planned work, active development, and completed changes.
-          </p>
-          <a className="primary-action" href="#browse">
-            Browse changes
-            <svg viewBox="0 0 20 20" fill="none" aria-hidden="true">
-              <path d="M10 3.5v12m0 0 4.5-4.5M10 15.5 5.5 11" />
-            </svg>
-          </a>
+      <section className="tracker-intro" aria-labelledby="tracker-title">
+        <div className="page-shell">
+          <h1 id="tracker-title">Every change, in one place.</h1>
+          <p>Features, fixes, and community reports from planning through release.</p>
         </div>
       </section>
 
-      <section id="browse" className="browse-section" aria-labelledby="browse-heading">
-        <header className="browse-heading">
-          <h2 id="browse-heading">Roadmap</h2>
-        </header>
-
+      <section id="browse" className="tracker-browser page-shell" aria-labelledby="browse-heading">
+        <h2 id="browse-heading" className="visually-hidden">
+          Browse tracked changes
+        </h2>
         <form className="filters" role="search" onSubmit={(event) => event.preventDefault()}>
           <label className="filter-control filter-control--search">
             <span>Search changes</span>
@@ -106,7 +92,7 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
               type="search"
               value={search}
               onChange={(event) => setSearch(event.target.value)}
-              placeholder="Search the roadmap…"
+              placeholder="Search the tracker…"
               autoComplete="off"
             />
           </label>
@@ -114,6 +100,7 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
             <span>Priority</span>
             <select
               name="priority"
+              autoComplete="off"
               value={priority}
               onChange={(event) => setPriority(event.target.value as PublicPriority | "")}
             >
@@ -128,6 +115,7 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
             <span>Category</span>
             <select
               name="kind"
+              autoComplete="off"
               value={kind}
               onChange={(event) => setKind(event.target.value as PublicKind | "")}
             >
@@ -140,6 +128,7 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
             <span>Status</span>
             <select
               name="status"
+              autoComplete="off"
               value={status}
               onChange={(event) => setStatus(event.target.value)}
             >
@@ -167,7 +156,7 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
         {items.state === "loading" ? <RoadmapSkeleton /> : null}
         {items.state === "error" ? <InlineError message={items.message} /> : null}
         {items.state === "ready" ? (
-          <RoadmapBoard
+          <TrackerBoard
             items={filteredItems}
             config={config}
             filtered={hasFilters}
@@ -180,7 +169,7 @@ export function RoadmapOverview({ config }: { config: PublicConfig }) {
   );
 }
 
-function RoadmapBoard({
+function TrackerBoard({
   items,
   config,
   filtered,
@@ -216,7 +205,7 @@ function RoadmapBoard({
         <p>
           {filtered
             ? "Try another search or clear the filters."
-            : "The roadmap is empty. Published changes will appear here."}
+            : "The tracker is empty. Published changes will appear here."}
         </p>
         {filtered ? (
           <button type="button" onClick={onClearFilters}>
@@ -236,17 +225,11 @@ function RoadmapBoard({
           aria-labelledby={`category-${group.id}`}
         >
           <header className="category-header">
-            <h3 id={`category-${group.id}`}>{group.label}</h3>
+            <h3 id={`category-${group.id}`}>
+              {group.id === "feature" ? "Features" : group.id === "bug" ? "Bugs" : group.label}
+            </h3>
             <strong>{group.items.length}</strong>
           </header>
-          <nav className="status-index" aria-label={`${group.label} statuses`}>
-            {group.sections.map((section) => (
-              <a key={section.id} href={`#${group.id}-status-${section.id}`}>
-                <span>{section.label}</span>
-                <strong aria-label={`${section.items.length} items`}>{section.items.length}</strong>
-              </a>
-            ))}
-          </nav>
           <div className="roadmap-board">
             {group.sections.map((section) => (
               <section
@@ -291,7 +274,8 @@ function RoadmapItemRow({ item }: { item: RoadmapItem }) {
         src={`/brand/priority/${item.priority}.svg`}
         width="64"
         height="64"
-        alt={`${priority} priority`}
+        loading="lazy"
+        alt=""
         title={`${priority} priority`}
       />
       <h4>{item.title}</h4>

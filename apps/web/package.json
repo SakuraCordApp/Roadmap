@@ -10,6 +10,7 @@
     "test": "vitest run src"
   },
   "dependencies": {
+    "@phosphor-icons/react": "^2.1.10",
     "@roadmap/core": "0.1.0",
     "react": "^19.1.1",
     "react-dom": "^19.1.1"

@@ -1,9 +1,15 @@
+import { DownloadSimpleIcon } from "@phosphor-icons/react/dist/csr/DownloadSimple";
+import { GithubLogoIcon } from "@phosphor-icons/react/dist/csr/GithubLogo";
+import { ListIcon } from "@phosphor-icons/react/dist/csr/List";
+import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
+import { MapTrifoldIcon } from "@phosphor-icons/react/dist/csr/MapTrifold";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { fetchConfig, type PublicConfig } from "./api.js";
+import { DiscordMark } from "./DiscordMark.js";
 import { type LoadState, toMessage } from "./load-state.js";
-import { buildPrimaryNavigation } from "./navigation.js";
 import { ItemDetail } from "./ItemDetail.js";
-import { RoadmapOverview } from "./RoadmapOverview.js";
+import { RoadmapTimeline } from "./RoadmapTimeline.js";
+import { TrackerOverview } from "./RoadmapOverview.js";
 import { ErrorPage, LoadingPage } from "./ui.js";
 
 export function App() {
@@ -16,7 +22,13 @@ export function App() {
     fetchConfig(controller.signal)
       .then((value) => {
         setConfig({ state: "ready", value });
-        if (!detailId) document.title = `${value.project.name} Engineering Roadmap`;
+        const surface = resolveSurface(value, detailId);
+        document.title =
+          surface === "roadmap"
+            ? `${value.project.name} Roadmap`
+            : detailId
+              ? `${value.project.name} Tracker item`
+              : `${value.project.name} Tracker`;
       })
       .catch((error: unknown) => {
         if (!controller.signal.aborted) setConfig({ state: "error", message: toMessage(error) });
@@ -28,6 +40,7 @@ export function App() {
   if (config.state === "error") return <ErrorPage message={config.message} />;
 
   const value = config.value;
+  const surface = resolveSurface(value, detailId);
   const theme = {
     "--brand-soft": value.branding.primaryColor,
     "--brand-strong": value.branding.accentColor,
@@ -37,11 +50,13 @@ export function App() {
 
   return (
     <div className="app-shell" style={theme}>
-      <PageShell config={value} isDetail={Boolean(detailId)}>
+      <PageShell config={value} surface={surface}>
         {detailId ? (
           <ItemDetail config={value} id={detailId} />
+        ) : surface === "tracker" ? (
+          <TrackerOverview config={value} />
         ) : (
-          <RoadmapOverview config={value} />
+          <RoadmapTimeline config={value} />
         )}
       </PageShell>
     </div>
@@ -58,17 +73,17 @@ function decodePathSegment(value: string): string {
 
 function PageShell({
   config,
-  isDetail,
+  surface,
   children,
 }: {
   config: PublicConfig;
-  isDetail: boolean;
+  surface: "roadmap" | "tracker";
   children: ReactNode;
 }) {
   const [menuOpen, setMenuOpen] = useState(false);
   const menuButtonRef = useRef<HTMLButtonElement>(null);
   const navigationRef = useRef<HTMLElement>(null);
-  const navigation = buildPrimaryNavigation(config, isDetail ? "detail" : "overview");
+  const navigation = buildNavigation(config, surface);
 
   useEffect(() => {
     if (!menuOpen) return;
@@ -84,84 +99,153 @@ function PageShell({
       setMenuOpen(false);
     };
 
+    const closeMenuWithKeyboard = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      setMenuOpen(false);
+      menuButtonRef.current?.focus();
+    };
+
     document.addEventListener("pointerdown", closeMenuFromOutside);
-    return () => document.removeEventListener("pointerdown", closeMenuFromOutside);
+    document.addEventListener("keydown", closeMenuWithKeyboard);
+    return () => {
+      document.removeEventListener("pointerdown", closeMenuFromOutside);
+      document.removeEventListener("keydown", closeMenuWithKeyboard);
+    };
   }, [menuOpen]);
 
-  const brandContent = (
-    <>
-      <img
-        className="site-brand__icon"
-        src={config.branding.iconUrl}
-        width="1024"
-        height="1024"
-        fetchPriority="high"
-        alt=""
-      />
-      <span translate="no">{config.project.name}</span>
-      <span className="site-brand__context">Roadmap</span>
-    </>
-  );
-
+  const homeHref =
+    surface === "tracker" ? (config.project.trackerUrl ?? "/tracker") : config.project.publicUrl;
   return (
     <>
-      <header className="site-header">
-        {isDetail ? (
-          <a className="site-brand" href="/" aria-label={`${config.project.name} roadmap home`}>
-            {brandContent}
+      <header className="site-header" aria-label="Primary navigation">
+        <div className="header-inner">
+          <a className="site-brand" href={homeHref} aria-label={`${config.project.name} home`}>
+            <img src={config.branding.iconUrl} width="42" height="42" fetchPriority="high" alt="" />
+            <span translate="no">{config.project.name}</span>
           </a>
-        ) : (
-          <div className="site-brand" aria-label={`${config.project.name} engineering roadmap`}>
-            {brandContent}
-          </div>
-        )}
-        <button
-          ref={menuButtonRef}
-          className="menu-button"
-          type="button"
-          aria-expanded={menuOpen}
-          aria-controls="primary-navigation"
-          aria-label={menuOpen ? "Close navigation" : "Open navigation"}
-          onClick={() => setMenuOpen((open) => !open)}
-        >
-          <span aria-hidden="true" />
-        </button>
-        <nav
-          ref={navigationRef}
-          id="primary-navigation"
-          className={menuOpen ? "primary-navigation is-open" : "primary-navigation"}
-          aria-label="Primary"
-        >
-          {navigation.map((link) => (
-            <a
-              key={`${link.label}-${link.href}`}
-              href={link.href}
-              target={link.external ? "_blank" : undefined}
-              rel={link.external ? "noreferrer" : undefined}
-              onClick={() => setMenuOpen(false)}
-            >
-              {link.label}
-            </a>
-          ))}
-        </nav>
+          <button
+            ref={menuButtonRef}
+            className="menu-button"
+            type="button"
+            aria-expanded={menuOpen}
+            aria-controls="primary-navigation"
+            aria-label={menuOpen ? "Close navigation" : "Open navigation"}
+            onClick={() => setMenuOpen((open) => !open)}
+          >
+            <ListIcon aria-hidden="true" weight="bold" />
+          </button>
+          <nav
+            ref={navigationRef}
+            id="primary-navigation"
+            className={menuOpen ? "primary-navigation is-open" : "primary-navigation"}
+            aria-label="SakuraCord links"
+          >
+            {navigation.map((link) => (
+              <a
+                key={`${link.label}-${link.href}`}
+                href={link.href}
+                className={`${link.active ? "is-active" : ""} ${link.primary ? "nav-download" : ""}`.trim()}
+                target={link.newTab ? "_blank" : undefined}
+                rel={link.newTab ? "noreferrer" : undefined}
+                aria-current={link.active ? "page" : undefined}
+                onClick={() => setMenuOpen(false)}
+              >
+                <NavigationIcon label={link.label} />
+                <span>{link.label}</span>
+              </a>
+            ))}
+          </nav>
+        </div>
       </header>
       <main id="main-content">{children}</main>
       <footer className="site-footer">
         <div>
-          <strong>{config.project.name}</strong>
-          <span>{config.project.description}</span>
+          <a href={config.project.homeUrl ?? "https://sakuracord.app"}>
+            <img src={config.branding.iconUrl} width="28" height="28" loading="lazy" alt="" />
+            <strong>
+              {config.project.name}
+              {surface === "tracker" ? " Tracker" : ""}
+            </strong>
+          </a>
         </div>
         <nav aria-label="Roadmap resources">
-          <a href="/api/v1/items">Public API</a>
-          {navigation
-            .filter((link) => link.external)
-            .map((link) => (
-              <a key={`footer-${link.href}`} href={link.href} target="_blank" rel="noreferrer">
-                {link.label}
-              </a>
-            ))}
+          <a
+            href={
+              surface === "tracker"
+                ? config.project.publicUrl
+                : (config.project.trackerUrl ?? "/tracker")
+            }
+          >
+            {surface === "tracker" ? "View the public roadmap" : "Open the tracker"}
+          </a>
         </nav>
       </footer>
     </>
   );
+}
+
+function NavigationIcon({ label }: { label: string }) {
+  switch (label) {
+    case "Roadmap":
+      return <MapTrifoldIcon aria-hidden="true" weight="regular" />;
+    case "Tracker":
+      return <ListChecksIcon aria-hidden="true" weight="regular" />;
+    case "Discord":
+      return <DiscordMark />;
+    case "GitHub":
+      return <GithubLogoIcon aria-hidden="true" weight="fill" />;
+    case "Download":
+      return <DownloadSimpleIcon aria-hidden="true" weight="bold" />;
+    default:
+      return null;
+  }
+}
+
+interface SiteNavigationLink {
+  label: string;
+  href: string;
+  newTab?: boolean;
+  active?: boolean;
+  primary?: boolean;
+}
+
+function buildNavigation(
+  config: PublicConfig,
+  surface: "roadmap" | "tracker",
+): SiteNavigationLink[] {
+  return [
+    {
+      label: "Roadmap",
+      href: config.project.publicUrl,
+      active: surface === "roadmap",
+    },
+    {
+      label: "Tracker",
+      href: config.project.trackerUrl ?? "/tracker",
+      active: surface === "tracker",
+    },
+    ...(config.project.discordUrl
+      ? [{ label: "Discord", href: config.project.discordUrl, newTab: true }]
+      : []),
+    ...(config.project.contributionUrl
+      ? [{ label: "GitHub", href: config.project.contributionUrl, newTab: true }]
+      : []),
+    ...(config.project.downloadUrl
+      ? [
+          {
+            label: "Download",
+            href: config.project.downloadUrl,
+            primary: true,
+          },
+        ]
+      : []),
+  ];
+}
+
+function resolveSurface(config: PublicConfig, detailId: string | null): "roadmap" | "tracker" {
+  if (detailId || window.location.pathname === "/tracker") return "tracker";
+  if (!config.project.trackerUrl) return "roadmap";
+  return window.location.hostname === new URL(config.project.trackerUrl).hostname
+    ? "tracker"
+    : "roadmap";
 }

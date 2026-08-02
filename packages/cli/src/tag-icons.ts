@@ -67,6 +67,23 @@ export async function generateTagIconPayloads(
   );
 }
 
+export async function generateRoadmapTimelineEmojiPayloads(
+  theme: Pick<TagIconTheme, "primaryColor" | "accentColor">,
+): Promise<Record<"line" | "dot", string>> {
+  const line = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><path d="M64 0v128" stroke="#8F8993" stroke-width="9" stroke-linecap="round"/></svg>`;
+  const dot = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128"><path d="M64 0v128" stroke="#8F8993" stroke-width="9" stroke-linecap="round"/><circle cx="64" cy="64" r="33" fill="#0C0B10" stroke="${theme.primaryColor}" stroke-width="9"/><circle cx="64" cy="64" r="14" fill="${theme.accentColor}"/></svg>`;
+  const entries = await Promise.all(
+    [
+      ["line", line],
+      ["dot", dot],
+    ].map(async ([key, source]) => {
+      const png = await sharp(Buffer.from(source!)).resize(128, 128).png().toBuffer();
+      return [key!, `data:image/png;base64,${png.toString("base64")}`] as const;
+    }),
+  );
+  return Object.fromEntries(entries) as Record<"line" | "dot", string>;
+}
+
 function categorySvg(start: string, end: string, kind: "visual" | "functionality"): string {
   const glyph =
     kind === "visual"

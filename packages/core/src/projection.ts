@@ -1,5 +1,6 @@
 import type { RoadmapConfig } from "./config.js";
 import type { RoadmapItem } from "./schema.js";
+import type { RoadmapVersion } from "./version.js";
 
 export interface DiscordRoadmapSection {
   id: string;
@@ -87,4 +88,73 @@ export function renderDiscordText(projection: DiscordRoadmapProjection): string 
 
 export function escapeDiscord(value: string): string {
   return value.replace(/([\\`*_{}[\]()#+\-.!|>~])/g, "\\$1").replace(/@/g, "@\u200b");
+}
+
+export interface VersionRoadmapProjection {
+  versions: Array<{
+    id: string;
+    version: string;
+    title: string;
+    summary: string;
+    state: "planned" | "released";
+    highlights: Array<{ id: string; title: string; description?: string }>;
+    releaseUrl?: string;
+  }>;
+  generatedAt: string;
+  hashInput: string;
+}
+
+export async function generateVersionRoadmapProjection(
+  versions: RoadmapVersion[],
+  now = new Date(),
+): Promise<VersionRoadmapProjection & { hash: string }> {
+  const planned = versions
+    .filter(
+      (version): version is RoadmapVersion & { state: "planned" } => version.state === "planned",
+    )
+    .sort((left, right) => left.position - right.position || compareVersions(left, right));
+  const projected = planned.map((version) => ({
+    id: version.id,
+    version: version.version,
+    title: version.title,
+    summary: version.summary,
+    state: version.state,
+    highlights: version.highlights.map(({ id, title, description }) => ({
+      id,
+      title,
+      ...(description ? { description } : {}),
+    })),
+    ...(version.releaseUrl ? { releaseUrl: version.releaseUrl } : {}),
+  }));
+  const hashInput = JSON.stringify(projected);
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(hashInput));
+  const hash = [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
+  return { versions: projected, generatedAt: now.toISOString(), hashInput, hash };
+}
+
+export function renderVersionDiscordText(projection: VersionRoadmapProjection): string {
+  const versions = projection.versions.map((version) => {
+    const highlights = version.highlights.map(
+      (highlight) => `│ **${escapeDiscord(highlight.title)}**`,
+    );
+    return `## ◉ v${escapeDiscord(version.version)} — ${escapeDiscord(version.title)}\n${
+      highlights.length ? highlights.join("\n") : "_Highlights are being prepared._"
+    }`;
+  });
+  return `# SakuraCord Roadmap\n\n${
+    versions.length ? versions.join("\n\n") : "_The next version plan is being prepared._"
+  }`;
+}
+
+function compareVersions(left: RoadmapVersion, right: RoadmapVersion): number {
+  const parse = (value: string) => value.split("-", 1)[0]!.split(".").map(Number);
+  const leftParts = parse(left.version);
+  const rightParts = parse(right.version);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] ?? 0) - (rightParts[index] ?? 0);
+    if (difference) return difference;
+  }
+  return left.version.localeCompare(right.version);
 }

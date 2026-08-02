@@ -1,10 +1,11 @@
-import { RoadmapError, type RoadmapConfig } from "@roadmap/core";
+import { RoadmapError, RoadmapVersionEngine, type RoadmapConfig } from "@roadmap/core";
 import type { Env } from "./env.js";
 import { DiscordRestClient } from "./discord/rest.js";
 import { generateStructuredReleaseCopy } from "./ai-oauth.js";
 import { isTerminalAiAuthorizationError, MAX_AUTOMATION_ATTEMPTS } from "./job-recovery.js";
 import { readBodyTextLimited, SIGNED_WEBHOOK_BODY_LIMIT } from "./request-body.js";
 import { constantTimeEqual, redactError, sha256 } from "./security.js";
+import { D1RoadmapStorage } from "./storage.js";
 
 const GITHUB_API = "https://api.github.com";
 
@@ -331,6 +332,48 @@ async function processReleaseJob(env: Env, config: RoadmapConfig, job: ReleaseJo
       .bind(message.id, job.id)
       .run();
   }
+
+  await markMatchingRoadmapVersionReleased(env, config, job);
+}
+
+async function markMatchingRoadmapVersionReleased(
+  env: Env,
+  config: RoadmapConfig,
+  job: ReleaseJob,
+): Promise<void> {
+  const normalizedTag = job.tag_name.replace(/^v/i, "");
+  const engine = new RoadmapVersionEngine(new D1RoadmapStorage(env.DB), config);
+  const versions = await engine.list({ states: ["planned", "released"], limit: 250 });
+  let matching = versions.find((version) => version.version === normalizedTag);
+  if (!matching || matching.state === "released") return;
+
+  const actor = {
+    id: "github-release-automation",
+    displayName: "GitHub release automation",
+    kind: "system" as const,
+  };
+  if (matching.releaseUrl !== job.release_url) {
+    const updated = await engine.update(
+      matching.id,
+      { releaseUrl: job.release_url },
+      matching.revision,
+      {
+        actor,
+        mutationId: `release-version-url:${job.repository}:${job.release_id}`,
+      },
+    );
+    matching = updated.after;
+  }
+  await engine.transition(
+    matching.id,
+    "released",
+    matching.revision,
+    {
+      actor,
+      mutationId: `release-version-state:${job.repository}:${job.release_id}`,
+    },
+    { releaseUrl: job.release_url, releasedAt: job.published_at },
+  );
 }
 
 async function findPreviousReleaseTag(

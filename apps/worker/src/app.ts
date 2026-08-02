@@ -1,14 +1,19 @@
 import {
   AcceptanceCriterionSchema,
   CreateRoadmapItemSchema,
+  CreateRoadmapVersionSchema,
   DiscordThreadLinkSchema,
   RoadmapEngine,
   RoadmapError,
   RoadmapItemSchema,
   RoadmapPatchSchema,
+  RoadmapVersionEngine,
+  RoadmapVersionPatchSchema,
+  RoadmapVersionStateSchema,
+  RoadmapVersionTransitionRequestSchema,
   TransitionRequestSchema,
   diffValues,
-  generateDiscordProjection,
+  generateVersionRoadmapProjection,
 } from "@roadmap/core";
 import { createRoadmapMcpServer } from "@roadmap/mcp";
 import { Hono } from "hono";
@@ -41,6 +46,7 @@ import { D1RoadmapStorage } from "./storage.js";
 
 type Variables = {
   engine: RoadmapEngine;
+  versionEngine: RoadmapVersionEngine;
   sync: DiscordSyncService;
 };
 
@@ -131,7 +137,9 @@ export function createApp() {
   app.use("*", async (context, next) => {
     const storage = new D1RoadmapStorage(context.env.DB);
     const engine = new RoadmapEngine(storage, roadmapConfig);
+    const versionEngine = new RoadmapVersionEngine(storage, roadmapConfig);
     context.set("engine", engine);
+    context.set("versionEngine", versionEngine);
     context.set("sync", new DiscordSyncService(context.env, roadmapConfig, engine));
     await next();
     const path = new URL(context.req.url).pathname;
@@ -139,7 +147,10 @@ export function createApp() {
     if (
       context.res.ok &&
       isMutation &&
-      (path.startsWith("/api/v1/items") || path === "/interactions/discord")
+      (path.startsWith("/api/v1/items") ||
+        path.startsWith("/api/v1/versions") ||
+        path === "/api/v1/discord/roadmap-emojis/configure" ||
+        path === "/interactions/discord")
     ) {
       context.executionCtx.waitUntil(
         context.var.sync.processPendingJobs(20).catch((error) => {
@@ -197,7 +208,7 @@ export function createApp() {
     ).first<{ value: string }>();
     return context.json(
       {
-        ok: schema?.value === "6",
+        ok: schema?.value === "8",
         schemaVersion: schema?.value ?? null,
         project: roadmapConfig.project.slug,
       },
@@ -264,6 +275,81 @@ export function createApp() {
     return context.json({ data: item }, 200, headers);
   });
 
+  app.get("/api/v1/versions", async (context) => {
+    await enforcePublicRateLimit(context.req.raw, context.env);
+    const versions = await context.var.versionEngine.list({
+      states: ["released", "planned"],
+      limit: 50,
+    });
+    const etag = await weakEtag(versions);
+    const headers = {
+      "Cache-Control": "public, max-age=30, stale-while-revalidate=120",
+      ETag: etag,
+    };
+    if (etagMatches(context.req.header("If-None-Match"), etag)) {
+      return context.body(null, 304, headers);
+    }
+    return context.json({ data: versions }, 200, headers);
+  });
+
+  app.get("/api/v1/versions/events", async (context) => {
+    await enforcePublicRateLimit(context.req.raw, context.env);
+    const versions = await context.var.versionEngine.list({
+      states: ["released", "planned"],
+      limit: 50,
+    });
+    const eventId = (await weakEtag(versions)).replaceAll('"', "").replace(/^W\//, "");
+    // A short SSE response deliberately lets EventSource reconnect. This keeps
+    // updates near-live without holding a Worker invocation or D1 connection open.
+    const body = `retry: 5000\nid: ${eventId}\nevent: versions\ndata: ${JSON.stringify({ data: versions })}\n\n`;
+    return context.body(body, 200, {
+      "Cache-Control": "no-cache, no-store, no-transform",
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "X-Accel-Buffering": "no",
+    });
+  });
+
+  app.get("/api/v1/versions/:id", async (context) => {
+    await enforcePublicRateLimit(context.req.raw, context.env);
+    const version = await context.var.versionEngine.get(context.req.param("id"));
+    if (version.state !== "planned" && version.state !== "released") {
+      throw new RoadmapError("NOT_FOUND", `Roadmap version ${version.id} was not found.`, 404);
+    }
+    return context.json({ data: version }, 200, {
+      "Cache-Control": "public, max-age=30, stale-while-revalidate=120",
+      ETag: `"${version.id}:${version.revision}"`,
+    });
+  });
+
+  app.get("/api/v1/manage/versions", async (context) => {
+    await authorizeMutation(context.req.raw, context.env);
+    const state = context.req.query("state");
+    const states = state ? [RoadmapVersionStateSchema.parse(state)] : undefined;
+    return context.json({
+      data: await context.var.versionEngine.list({ ...(states ? { states } : {}), limit: 250 }),
+    });
+  });
+
+  app.get("/api/v1/manage/versions/:id", async (context) => {
+    await authorizeMutation(context.req.raw, context.env);
+    return context.json({ data: await context.var.versionEngine.get(context.req.param("id")) });
+  });
+
+  app.get("/api/v1/manage/version-history", async (context) => {
+    await authorizeMutation(context.req.raw, context.env);
+    const query = z
+      .object({
+        versionId: z.string().trim().min(1).max(100).optional(),
+        since: isoDateTime.optional(),
+        limit: z.coerce.number().int().min(1).max(500).default(100),
+      })
+      .strict()
+      .parse(context.req.query());
+    return context.json({
+      data: await context.var.versionEngine.history(query.versionId, query.since, query.limit),
+    });
+  });
+
   app.get("/api/v1/history", async (context) => {
     await enforcePublicRateLimit(context.req.raw, context.env);
     const query = HistoryQuerySchema.parse(context.req.query());
@@ -301,8 +387,11 @@ export function createApp() {
 
   app.get("/api/v1/discord/projection", async (context) => {
     await enforcePublicRateLimit(context.req.raw, context.env);
-    const items = await context.var.engine.list({ limit: 250 });
-    const projection = await generateDiscordProjection(items.data, roadmapConfig);
+    const versions = await context.var.versionEngine.list({
+      states: ["released", "planned"],
+      limit: 50,
+    });
+    const projection = await generateVersionRoadmapProjection(versions);
     return context.json({ data: projection });
   });
 
@@ -312,9 +401,22 @@ export function createApp() {
     const lastReconcile = await context.env.DB.prepare(
       "SELECT value FROM discord_state WHERE key='last_reconcile_at'",
     ).first<{ value: string }>();
+    const roadmapState = await context.env.DB.prepare(
+      `SELECT key,value FROM discord_state
+       WHERE key IN ('roadmap_message_id','roadmap_projection_hash','roadmap_last_published_at')`,
+    ).all<{ key: string; value: string }>();
+    const roadmapValues = Object.fromEntries(
+      roadmapState.results.map((entry) => [entry.key, entry.value]),
+    );
     return context.json({
       data: {
         ...status,
+        versionRoadmap: {
+          automaticUpdates: true,
+          messageId: roadmapValues.roadmap_message_id ?? null,
+          projectionHash: roadmapValues.roadmap_projection_hash ?? null,
+          lastPublishedAt: roadmapValues.roadmap_last_published_at ?? null,
+        },
         gateway: {
           provider: "cloudflare-scheduled-reconciliation",
           mode: "polling",
@@ -333,6 +435,60 @@ export function createApp() {
       mutationId: mutationId(context.req.raw),
     });
     return context.json(withDiff(result), result.replayed ? 200 : 201);
+  });
+
+  app.post("/api/v1/versions", async (context) => {
+    const actor = await authorizeMutation(context.req.raw, context.env);
+    const input = CreateRoadmapVersionSchema.parse(await readJsonBodyLimited(context.req.raw));
+    const result = await context.var.versionEngine.create(input, {
+      actor,
+      mutationId: mutationId(context.req.raw),
+    });
+    return context.json(withDiff(result), result.replayed ? 200 : 201);
+  });
+
+  app.patch("/api/v1/versions/:id", async (context) => {
+    const actor = await authorizeMutation(context.req.raw, context.env);
+    const body = z
+      .object({
+        expectedRevision: z.number().int().positive(),
+        patch: RoadmapVersionPatchSchema,
+        overrideReason: z.string().trim().min(10).max(2_000).optional(),
+      })
+      .parse(await readJsonBodyLimited(context.req.raw));
+    const result = await context.var.versionEngine.update(
+      context.req.param("id"),
+      body.patch,
+      body.expectedRevision,
+      {
+        actor,
+        mutationId: mutationId(context.req.raw),
+        ...(body.overrideReason ? { overrideReason: body.overrideReason } : {}),
+      },
+    );
+    return context.json(withDiff(result));
+  });
+
+  app.post("/api/v1/versions/:id/transition", async (context) => {
+    const actor = await authorizeMutation(context.req.raw, context.env);
+    const body = RoadmapVersionTransitionRequestSchema.parse(
+      await readJsonBodyLimited(context.req.raw),
+    );
+    const result = await context.var.versionEngine.transition(
+      context.req.param("id"),
+      body.to,
+      body.expectedRevision,
+      {
+        actor,
+        mutationId: mutationId(context.req.raw),
+        ...(body.overrideReason ? { overrideReason: body.overrideReason } : {}),
+      },
+      {
+        ...(body.releaseUrl ? { releaseUrl: body.releaseUrl } : {}),
+        ...(body.releasedAt ? { releasedAt: body.releasedAt } : {}),
+      },
+    );
+    return context.json(withDiff(result));
   });
 
   app.patch("/api/v1/items/:id", async (context) => {
@@ -451,6 +607,28 @@ export function createApp() {
       .parse(await readJsonBodyLimited(context.req.raw, FORUM_CONFIGURATION_BODY_LIMIT, {}));
     return context.json({
       data: await context.var.sync.configureForums(body.icons, body.replaceIconKeys),
+    });
+  });
+
+  app.post("/api/v1/discord/roadmap-emojis/configure", async (context) => {
+    await authorizeMutation(context.req.raw, context.env);
+    const body = z
+      .object({
+        emojis: z
+          .object({
+            line: z.string().max(512_000).optional(),
+            dot: z.string().max(512_000).optional(),
+          })
+          .strict(),
+        replaceKeys: z
+          .array(z.enum(["line", "dot"]))
+          .max(2)
+          .default([]),
+      })
+      .strict()
+      .parse(await readJsonBodyLimited(context.req.raw, FORUM_CONFIGURATION_BODY_LIMIT, {}));
+    return context.json({
+      data: await context.var.sync.configureRoadmapEmojis(body.emojis, body.replaceKeys),
     });
   });
 
@@ -596,17 +774,61 @@ export function createApp() {
     });
   });
 
+  app.get("/tracker", async (context) => {
+    if (isLocalRequest(context.req.raw)) {
+      const asset = await context.env.ASSETS.fetch(indexRequest(context.req.raw));
+      return mutableAssetResponse(asset);
+    }
+    return context.redirect(roadmapConfig.project.trackerUrl ?? "/", 308);
+  });
+
+  app.get("/tracker/*", (context) => {
+    const suffix = new URL(context.req.url).pathname.replace(/^\/tracker/, "");
+    return context.redirect(`${roadmapConfig.project.trackerUrl ?? ""}${suffix || "/"}`, 308);
+  });
+
+  app.get("/items/:id", async (context) => {
+    const trackerUrl = roadmapConfig.project.trackerUrl;
+    if (trackerUrl && new URL(context.req.url).hostname !== new URL(trackerUrl).hostname) {
+      return context.redirect(
+        `${trackerUrl}/items/${encodeURIComponent(context.req.param("id"))}`,
+        308,
+      );
+    }
+    const asset = await context.env.ASSETS.fetch(indexRequest(context.req.raw));
+    return mutableAssetResponse(asset);
+  });
+
   app.all("*", async (context) => {
     const asset = await context.env.ASSETS.fetch(context.req.raw);
     // Asset binding responses have immutable headers. Hono's security-header
     // middleware needs a mutable response after the route returns.
-    return new Response(asset.body, {
-      status: asset.status,
-      statusText: asset.statusText,
-      headers: new Headers(asset.headers),
-    });
+    return mutableAssetResponse(asset);
   });
   return app;
+}
+
+function mutableAssetResponse(asset: Response): Response {
+  return new Response(asset.body, {
+    status: asset.status,
+    statusText: asset.statusText,
+    headers: new Headers(asset.headers),
+  });
+}
+
+function indexRequest(request: Request): Request {
+  return new Request(new URL("/", request.url), {
+    headers: request.headers,
+    method: "GET",
+  });
+}
+
+function isLocalRequest(request: Request): boolean {
+  const hostname = new URL(request.url).hostname;
+  const hostHeader = request.headers.get("Host")?.split(":", 1)[0];
+  return [hostname, hostHeader].some(
+    (host) => host === "localhost" || host === "127.0.0.1" || host === "[::1]",
+  );
 }
 
 async function authorizeMutation(request: Request, env: Env) {

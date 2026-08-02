@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import roadmapConfig from "../../../../roadmap.config.js";
 import type { RoadmapItem } from "@roadmap/core";
-import { applyRoadmapTags, desiredForumTags, ensureForumTaxonomy } from "./forums.js";
+import {
+  applyRoadmapTags,
+  desiredForumTags,
+  ensureForumTaxonomy,
+  ensureRoadmapTimelineEmojis,
+} from "./forums.js";
 import type { DiscordRestClient } from "./rest.js";
 
 describe("Discord forum taxonomy", () => {
@@ -174,5 +179,35 @@ describe("Discord forum taxonomy", () => {
     expect(rest.post).toHaveBeenCalledOnce();
     expect(result[0]?.tags.find((tag) => tag.name === "High")?.emojiId).toBe("new-sakura_tag_high");
     expect(result[0]?.tags.find((tag) => tag.name === "Low")?.emojiId).toBe("old-low");
+  });
+
+  it("creates and selectively replaces the website-matched roadmap timeline emojis", async () => {
+    const rest = {
+      get: vi.fn(async () => [
+        { id: "old-line", name: "sakura_roadmap_line" },
+        { id: "old-dot", name: "sakura_roadmap_dot" },
+      ]),
+      delete: vi.fn(async () => undefined),
+      post: vi.fn(async (_path: string, body: { name: string }) => ({
+        id: `new-${body.name}`,
+        name: body.name,
+      })),
+    } as unknown as DiscordRestClient;
+
+    const result = await ensureRoadmapTimelineEmojis(
+      rest,
+      roadmapConfig,
+      { line: "data:image/png;base64,bGluZQ==", dot: "data:image/png;base64,ZG90" },
+      new Set(["dot"]),
+    );
+
+    expect(rest.delete).toHaveBeenCalledWith(
+      `/guilds/${roadmapConfig.discord.guildId}/emojis/old-dot`,
+    );
+    expect(rest.post).toHaveBeenCalledOnce();
+    expect(result).toEqual([
+      { key: "line", id: "old-line", name: "sakura_roadmap_line" },
+      { key: "dot", id: "new-sakura_roadmap_dot", name: "sakura_roadmap_dot" },
+    ]);
   });
 });

@@ -3,13 +3,21 @@ import {
   HistoryEntrySchema,
   RoadmapError,
   RoadmapItemSchema,
+  RoadmapVersionHistoryEntrySchema,
+  RoadmapVersionSchema,
   type AtomicMutation,
+  type AtomicVersionMutation,
   type HistoryEntry,
   type ListItemsQuery,
+  type ListVersionsQuery,
   type MutationResult,
   type Page,
   type RoadmapItem,
   type RoadmapStorage,
+  type RoadmapVersion,
+  type RoadmapVersionHistoryEntry,
+  type RoadmapVersionStorage,
+  type VersionMutationResult,
 } from "@roadmap/core";
 
 interface ItemRow {
@@ -29,7 +37,20 @@ interface HistoryRow {
   created_at: string;
 }
 
-export class D1RoadmapStorage implements RoadmapStorage {
+interface VersionHistoryRow {
+  id: number;
+  version_id: string;
+  revision: number;
+  mutation_id: string;
+  action: RoadmapVersionHistoryEntry["action"];
+  actor_json: string;
+  before_json: string | null;
+  after_json: string;
+  override_reason: string | null;
+  created_at: string;
+}
+
+export class D1RoadmapStorage implements RoadmapStorage, RoadmapVersionStorage {
   constructor(private readonly db: D1Database) {}
 
   async list(query: ListItemsQuery): Promise<Page<RoadmapItem>> {
@@ -341,6 +362,215 @@ export class D1RoadmapStorage implements RoadmapStorage {
     };
   }
 
+  async listVersions(query: ListVersionsQuery): Promise<RoadmapVersion[]> {
+    const conditions: string[] = [];
+    const bindings: Array<string | number> = [];
+    if (query.states?.length) {
+      conditions.push(`state IN (${query.states.map(() => "?").join(",")})`);
+      bindings.push(...query.states);
+    }
+    const limit = Math.min(Math.max(query.limit ?? 100, 1), 250);
+    bindings.push(limit);
+    const result = await this.db
+      .prepare(
+        `SELECT document FROM roadmap_versions
+         ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY
+           CASE state WHEN 'released' THEN 1 WHEN 'planned' THEN 2 WHEN 'draft' THEN 3 ELSE 4 END,
+           position ASC,
+           version ASC
+         LIMIT ?`,
+      )
+      .bind(...bindings)
+      .all<ItemRow>();
+    return result.results.map((row) => RoadmapVersionSchema.parse(JSON.parse(row.document)));
+  }
+
+  async getVersion(id: string): Promise<RoadmapVersion | null> {
+    const row = await this.db
+      .prepare("SELECT document FROM roadmap_versions WHERE id = ?")
+      .bind(id)
+      .first<ItemRow>();
+    return row ? RoadmapVersionSchema.parse(JSON.parse(row.document)) : null;
+  }
+
+  async mutateVersion(mutation: AtomicVersionMutation): Promise<VersionMutationResult> {
+    const replay = await this.replayVersion(mutation.mutationId);
+    if (replay) return replay;
+
+    const version = mutation.version;
+    const actorJson = JSON.stringify(mutation.actor);
+    const document = JSON.stringify(version);
+    if (mutation.expectedRevision === null) {
+      try {
+        await this.db.batch([
+          this.db
+            .prepare(
+              `INSERT INTO roadmap_versions (
+                id,version,title,state,position,revision,created_at,updated_at,released_at,
+                document,actor_json,mutation_id,mutation_action,override_reason
+              ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            )
+            .bind(
+              version.id,
+              version.version,
+              version.title,
+              version.state,
+              version.position,
+              version.revision,
+              version.createdAt,
+              version.updatedAt,
+              version.releasedAt ?? null,
+              document,
+              actorJson,
+              mutation.mutationId,
+              mutation.action,
+              mutation.overrideReason ?? null,
+            ),
+          this.db
+            .prepare(
+              `INSERT INTO roadmap_version_history (
+                version_id,revision,mutation_id,action,actor_json,before_json,after_json,override_reason
+              ) VALUES (?,?,?,?,?,?,?,?)`,
+            )
+            .bind(
+              version.id,
+              version.revision,
+              mutation.mutationId,
+              mutation.action,
+              actorJson,
+              null,
+              document,
+              mutation.overrideReason ?? null,
+            ),
+          this.db
+            .prepare(
+              `INSERT OR IGNORE INTO sync_jobs (job_key,kind,payload)
+               VALUES (?,?,'{}')`,
+            )
+            .bind(`version-projection:${version.id}:${version.revision}`, "publish_roadmap"),
+        ]);
+      } catch (error) {
+        const replayAfterRace = await this.replayVersion(mutation.mutationId);
+        if (replayAfterRace) return replayAfterRace;
+        throw error;
+      }
+      return { before: null, after: version, replayed: false };
+    }
+
+    const before = await this.getVersion(version.id);
+    const appliesToCurrentMutation = `EXISTS (
+      SELECT 1 FROM roadmap_versions
+      WHERE id = ? AND revision = ? AND mutation_id = ?
+    )`;
+    const results = await this.db.batch([
+      this.db
+        .prepare(
+          `UPDATE roadmap_versions SET
+            version=?,title=?,state=?,position=?,revision=?,updated_at=?,released_at=?,
+            document=?,actor_json=?,mutation_id=?,mutation_action=?,override_reason=?
+           WHERE id=? AND revision=?`,
+        )
+        .bind(
+          version.version,
+          version.title,
+          version.state,
+          version.position,
+          version.revision,
+          version.updatedAt,
+          version.releasedAt ?? null,
+          document,
+          actorJson,
+          mutation.mutationId,
+          mutation.action,
+          mutation.overrideReason ?? null,
+          version.id,
+          mutation.expectedRevision,
+        ),
+      this.db
+        .prepare(
+          `INSERT INTO roadmap_version_history (
+            version_id,revision,mutation_id,action,actor_json,before_json,after_json,override_reason
+          ) SELECT ?,?,?,?,?,?,?,? WHERE ${appliesToCurrentMutation}`,
+        )
+        .bind(
+          version.id,
+          version.revision,
+          mutation.mutationId,
+          mutation.action,
+          actorJson,
+          before ? JSON.stringify(before) : null,
+          document,
+          mutation.overrideReason ?? null,
+          version.id,
+          version.revision,
+          mutation.mutationId,
+        ),
+      this.db
+        .prepare(
+          `INSERT OR IGNORE INTO sync_jobs (job_key,kind,payload)
+           SELECT ?,?,'{}' WHERE ${appliesToCurrentMutation}`,
+        )
+        .bind(
+          `version-projection:${version.id}:${version.revision}`,
+          "publish_roadmap",
+          version.id,
+          version.revision,
+          mutation.mutationId,
+        ),
+    ]);
+    if (results[0]?.meta.changes !== 1) {
+      const replayAfterRace = await this.replayVersion(mutation.mutationId);
+      if (replayAfterRace) return replayAfterRace;
+      const current = await this.getVersion(version.id);
+      throw new ConflictError(
+        `Revision ${mutation.expectedRevision} is no longer current for ${version.id}.`,
+        { current },
+      );
+    }
+    return { before, after: version, replayed: false };
+  }
+
+  async versionHistory(
+    versionId?: string,
+    since?: string,
+    limit = 100,
+  ): Promise<RoadmapVersionHistoryEntry[]> {
+    const conditions: string[] = [];
+    const bindings: Array<string | number> = [];
+    if (versionId) {
+      conditions.push("version_id = ?");
+      bindings.push(versionId);
+    }
+    if (since) {
+      conditions.push("created_at >= ?");
+      bindings.push(since);
+    }
+    bindings.push(Math.min(Math.max(limit, 1), 500));
+    const result = await this.db
+      .prepare(
+        `SELECT * FROM roadmap_version_history
+         ${conditions.length ? `WHERE ${conditions.join(" AND ")}` : ""}
+         ORDER BY created_at DESC, id DESC LIMIT ?`,
+      )
+      .bind(...bindings)
+      .all<VersionHistoryRow>();
+    return result.results.map((row) =>
+      RoadmapVersionHistoryEntrySchema.parse({
+        id: String(row.id),
+        versionId: row.version_id,
+        revision: row.revision,
+        mutationId: row.mutation_id,
+        action: row.action,
+        actor: JSON.parse(row.actor_json),
+        before: row.before_json ? JSON.parse(row.before_json) : null,
+        after: JSON.parse(row.after_json),
+        overrideReason: row.override_reason,
+        createdAt: normalizeSqliteTimestamp(row.created_at),
+      }),
+    );
+  }
+
   private async replay(mutationId: string): Promise<MutationResult | null> {
     const replay = await this.db
       .prepare("SELECT before_json, after_json FROM audit_history WHERE mutation_id = ?")
@@ -352,6 +582,22 @@ export class D1RoadmapStorage implements RoadmapStorage {
             ? RoadmapItemSchema.parse(JSON.parse(replay.before_json))
             : null,
           after: RoadmapItemSchema.parse(JSON.parse(replay.after_json)),
+          replayed: true,
+        }
+      : null;
+  }
+
+  private async replayVersion(mutationId: string): Promise<VersionMutationResult | null> {
+    const replay = await this.db
+      .prepare("SELECT before_json, after_json FROM roadmap_version_history WHERE mutation_id = ?")
+      .bind(mutationId)
+      .first<{ before_json: string | null; after_json: string }>();
+    return replay
+      ? {
+          before: replay.before_json
+            ? RoadmapVersionSchema.parse(JSON.parse(replay.before_json))
+            : null,
+          after: RoadmapVersionSchema.parse(JSON.parse(replay.after_json)),
           replayed: true,
         }
       : null;

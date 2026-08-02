@@ -2,6 +2,13 @@ import { RoadmapError, type RoadmapConfig, type RoadmapItem } from "@roadmap/cor
 import type { DiscordRestClient } from "./rest.js";
 
 export type TagIconPayloads = Record<string, string>;
+export type RoadmapEmojiPayloads = Partial<Record<"line" | "dot", string>>;
+
+export interface RoadmapEmojiResult {
+  key: "line" | "dot";
+  id: string;
+  name: string;
+}
 
 interface DiscordForumTag {
   id: string;
@@ -116,6 +123,37 @@ export async function ensureForumTaxonomy(
         emojiId: tag.emoji_id,
       })),
     });
+  }
+  return results;
+}
+
+export async function ensureRoadmapTimelineEmojis(
+  rest: DiscordRestClient,
+  config: RoadmapConfig,
+  payloads: RoadmapEmojiPayloads,
+  replaceKeys: Set<string> = new Set(),
+): Promise<RoadmapEmojiResult[]> {
+  const guildId = config.discord.guildId;
+  if (!guildId)
+    throw new RoadmapError("DISCORD_GUILD_MISSING", "Discord guild is not configured.", 503);
+  const existing = await rest.get<DiscordEmoji[]>(`/guilds/${guildId}/emojis`);
+  const byName = new Map(existing.map((emoji) => [emoji.name, emoji]));
+  const results: RoadmapEmojiResult[] = [];
+  for (const key of ["line", "dot"] as const) {
+    const name = `sakura_roadmap_${key}`;
+    let emoji = byName.get(name);
+    if (emoji && replaceKeys.has(key) && payloads[key]) {
+      await rest.delete(`/guilds/${guildId}/emojis/${emoji.id}`);
+      emoji = undefined;
+    }
+    if (!emoji && payloads[key]) {
+      emoji = await rest.post<DiscordEmoji>(
+        `/guilds/${guildId}/emojis`,
+        { name, image: payloads[key] },
+        `Create SakuraCord roadmap ${key} emoji`,
+      );
+    }
+    if (emoji) results.push({ key, id: emoji.id, name });
   }
   return results;
 }

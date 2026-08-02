@@ -64,10 +64,22 @@ notifications are emitted.
 - `roadmap_link_discord_thread`
 - `roadmap_add_acceptance_criterion`
 - `roadmap_generate_discord_view`
+- `roadmap_version_publish`
 - `roadmap_validate`
 - `roadmap_sync_status`
 - `roadmap_reconcile`
 - `roadmap_history`
+- `roadmap_version_list`
+- `roadmap_version_get`
+- `roadmap_version_create`
+- `roadmap_version_update`
+- `roadmap_version_transition`
+- `roadmap_version_history`
+
+Public version mutations are revision-safe and automatically propagate to the
+website stream and the canonical Discord message. `roadmap_version_publish` is
+the explicit repair/force-publish control; it is not required after ordinary
+create, update, or transition operations.
 
 Local mode adds:
 
@@ -80,9 +92,10 @@ files. Remote mode does not expose local repository inspection.
 
 ## Safe mutation behavior
 
-The skill requires Codex to read the current item revision before every write,
-use the exact `expectedRevision`, and surface conflicts. Completion overrides
-require an explicit reason and remain visible in audit history.
+The skill requires Codex to read the current item or version revision before
+every write, use the exact `expectedRevision`, and surface conflicts.
+Completion and publication overrides require an explicit reason and remain
+visible in audit history.
 
 All tool mutations call the same authenticated HTTP API as the CLI and Discord
 controls. MCP has no database bypass.

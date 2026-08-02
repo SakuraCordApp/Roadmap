@@ -1,8 +1,10 @@
 import {
   RoadmapConfigSchema,
   RoadmapItemSchema,
+  RoadmapVersionSchema,
   type RoadmapConfig,
   type RoadmapItem,
+  type RoadmapVersion,
 } from "@roadmap/core";
 import { z } from "zod";
 
@@ -51,6 +53,34 @@ export async function fetchItems(
 export async function fetchItem(id: string, signal?: AbortSignal): Promise<RoadmapItem> {
   const value = await request<{ data: unknown }>(`/api/v1/items/${encodeURIComponent(id)}`, signal);
   return RoadmapItemSchema.parse(value.data);
+}
+
+export async function fetchVersions(signal?: AbortSignal): Promise<RoadmapVersion[]> {
+  const value = await request<{ data: unknown[] }>("/api/v1/versions", signal);
+  return z.array(RoadmapVersionSchema).parse(value.data);
+}
+
+export function watchVersions(onVersions: (versions: RoadmapVersion[]) => void): () => void {
+  if (typeof EventSource === "undefined") {
+    const interval = window.setInterval(() => {
+      void fetchVersions()
+        .then(onVersions)
+        .catch(() => undefined);
+    }, 5_000);
+    return () => window.clearInterval(interval);
+  }
+
+  const source = new EventSource("/api/v1/versions/events");
+  const receiveVersions = (event: MessageEvent<string>) => {
+    try {
+      const payload = JSON.parse(event.data) as { data?: unknown };
+      onVersions(z.array(RoadmapVersionSchema).parse(payload.data));
+    } catch {
+      // Keep the last valid snapshot and let EventSource reconnect.
+    }
+  };
+  source.addEventListener("versions", receiveVersions as EventListener);
+  return () => source.close();
 }
 
 async function request<T>(url: string, signal?: AbortSignal): Promise<T> {

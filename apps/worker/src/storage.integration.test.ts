@@ -9,6 +9,7 @@ import {
   ensureCurrentSchema,
   RECOVERY_MIGRATION_STATEMENTS,
   STREAMLINE_MIGRATION_STATEMENTS,
+  VERSION_ROADMAP_MIGRATION_STATEMENTS,
 } from "./schema-migrations.js";
 import { D1RoadmapStorage } from "./storage.js";
 
@@ -58,6 +59,10 @@ describe("D1 canonical storage", () => {
       path.resolve("migrations/0007_recover_automation_jobs.sql"),
       "utf8",
     );
+    const versionRoadmapMigration = await readFile(
+      path.resolve("migrations/0008_version_roadmap.sql"),
+      "utf8",
+    );
     const statements = splitSqlQuery(initialMigration);
     const triggers = statements.filter((statement) => statement.startsWith("CREATE TRIGGER"));
 
@@ -73,6 +78,9 @@ describe("D1 canonical storage", () => {
     );
     expect(splitSqlQuery(recoveryMigration).map(normalizeSql)).toEqual(
       RECOVERY_MIGRATION_STATEMENTS.map(normalizeSql),
+    );
+    expect(splitSqlQuery(versionRoadmapMigration).map(normalizeSql)).toEqual(
+      VERSION_ROADMAP_MIGRATION_STATEMENTS.map(normalizeSql),
     );
   });
 
@@ -206,6 +214,7 @@ describe("D1 canonical storage", () => {
       expect(migrations.results.map(({ name }) => name)).toEqual([
         "0006_streamline_roadmap_items.sql",
         "0007_recover_automation_jobs.sql",
+        "0008_version_roadmap.sql",
       ]);
     } finally {
       await legacyMiniflare.dispose();

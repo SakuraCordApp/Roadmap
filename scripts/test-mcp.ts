@@ -35,6 +35,12 @@ const required = [
   "roadmap_transition",
   "roadmap_reconcile",
   "roadmap_history",
+  "roadmap_version_list",
+  "roadmap_version_get",
+  "roadmap_version_create",
+  "roadmap_version_update",
+  "roadmap_version_transition",
+  "roadmap_version_publish",
 ];
 for (const name of required) {
   if (!tools.some((tool) => tool.name === name)) throw new Error(`MCP tool missing: ${name}`);

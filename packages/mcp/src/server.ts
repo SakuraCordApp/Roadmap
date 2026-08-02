@@ -1,4 +1,10 @@
-import type { CreateRoadmapItem, RoadmapPatch } from "@roadmap/core";
+import {
+  RoadmapVersionStateSchema,
+  type CreateRoadmapItem,
+  type CreateRoadmapVersion,
+  type RoadmapPatch,
+  type RoadmapVersionPatch,
+} from "@roadmap/core";
 import { z } from "zod";
 import { RoadmapApiClient } from "./client.js";
 
@@ -336,10 +342,137 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
     {
       title: "Generate Discord roadmap view",
       description:
-        "Generate the feature-name-only Discord projection and its drift-prevention hash without publishing it.",
+        "Generate the public version-roadmap Discord projection and its drift-prevention hash without publishing it.",
       annotations: { readOnlyHint: true, openWorldHint: false },
     },
     async () => toolResult(await api.projection()),
+  );
+
+  server.registerTool(
+    "roadmap_version_publish",
+    {
+      title: "Publish version roadmap to Discord",
+      description:
+        "Publish or repair the canonical Discord version-roadmap message immediately. Normal version mutations already enqueue this automatically.",
+      inputSchema: { force: z.boolean().default(false) },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true },
+    },
+    async ({ force }) => toolResult(await api.publishVersionRoadmap(force)),
+  );
+
+  server.registerTool(
+    "roadmap_version_list",
+    {
+      title: "List roadmap versions",
+      description:
+        "List canonical version plans, including drafts when requested, in public display order.",
+      inputSchema: { state: RoadmapVersionStateSchema.optional() },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ state }) => toolResult(await api.listVersions(state)),
+  );
+
+  server.registerTool(
+    "roadmap_version_get",
+    {
+      title: "Get roadmap version",
+      description: "Get the complete current revision of one canonical version plan.",
+      inputSchema: { id: Id },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ id }) => toolResult(await api.getVersion(id)),
+  );
+
+  server.registerTool(
+    "roadmap_version_create",
+    {
+      title: "Create roadmap version",
+      description:
+        "Create a draft or planned version with a short product summary and curated public highlights.",
+      inputSchema: {
+        version: z.string().min(5).max(64),
+        title: z.string().min(1).max(180),
+        summary: z.string().min(1).max(2_000),
+        state: RoadmapVersionStateSchema.default("draft"),
+        position: z.number().int().min(0).max(10_000),
+        highlights: z
+          .array(
+            z
+              .object({
+                title: z.string().min(1).max(180),
+                description: z.string().max(2_000).optional(),
+                linkedTrackerItemIds: z.array(Id).max(50).default([]),
+              })
+              .strict(),
+          )
+          .max(12)
+          .default([]),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async (args) => toolResult(await api.createVersion(args as CreateRoadmapVersion)),
+  );
+
+  server.registerTool(
+    "roadmap_version_update",
+    {
+      title: "Update roadmap version",
+      description:
+        "Update version copy, ordering, links, or highlights using optimistic concurrency. State changes use roadmap_version_transition. Visible changes update the live website and enqueue the canonical Discord message automatically.",
+      inputSchema: {
+        id: Id,
+        expectedRevision: ExpectedRevision,
+        patch: z.record(z.string(), z.unknown()),
+        overrideReason: z.string().min(10).max(2_000).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ id, expectedRevision, patch, overrideReason }) =>
+      toolResult(
+        await api.updateVersion(id, expectedRevision, patch as RoadmapVersionPatch, overrideReason),
+      ),
+  );
+
+  server.registerTool(
+    "roadmap_version_transition",
+    {
+      title: "Transition roadmap version",
+      description:
+        "Move a version between draft, planned, released, and cancelled using its exact current revision.",
+      inputSchema: {
+        id: Id,
+        expectedRevision: ExpectedRevision,
+        to: RoadmapVersionStateSchema,
+        releaseUrl: z.httpUrl().optional(),
+        releasedAt: z.iso.datetime().optional(),
+        overrideReason: z.string().min(10).max(2_000).optional(),
+      },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
+    },
+    async ({ id, expectedRevision, to, releaseUrl, releasedAt, overrideReason }) =>
+      toolResult(
+        await api.transitionVersion(id, expectedRevision, to, {
+          ...(releaseUrl ? { releaseUrl } : {}),
+          ...(releasedAt ? { releasedAt } : {}),
+          ...(overrideReason ? { overrideReason } : {}),
+        }),
+      ),
+  );
+
+  server.registerTool(
+    "roadmap_version_history",
+    {
+      title: "Read roadmap version history",
+      description: "Read ordered audit history for one version plan or for all version plans.",
+      inputSchema: {
+        versionId: Id.optional(),
+        since: z.iso.datetime().optional(),
+        limit: z.number().int().min(1).max(500).default(100),
+      },
+      annotations: { readOnlyHint: true, openWorldHint: false },
+    },
+    async ({ versionId, since, limit }) =>
+      toolResult(await api.versionHistory(versionId, since, limit)),
   );
 
   server.registerTool(

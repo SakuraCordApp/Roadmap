@@ -31,10 +31,17 @@ describe("protocol-native MCP server", () => {
         "roadmap_link_discord_thread",
         "roadmap_add_acceptance_criterion",
         "roadmap_generate_discord_view",
+        "roadmap_version_publish",
         "roadmap_validate",
         "roadmap_sync_status",
         "roadmap_reconcile",
         "roadmap_history",
+        "roadmap_version_list",
+        "roadmap_version_get",
+        "roadmap_version_create",
+        "roadmap_version_update",
+        "roadmap_version_transition",
+        "roadmap_version_history",
       ]),
     );
     expect(tools.every((tool) => tool.inputSchema)).toBe(true);

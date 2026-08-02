@@ -12,16 +12,17 @@ independent D1 database.
 
 ## What is included
 
-- Strict, streamlined roadmap schemas with stable IDs, report-backed
-  classification, acceptance criteria, source references, and revision
-  numbers.
+- Separate, revision-safe schemas for the public version roadmap and detailed
+  bug/feature tracker. Tracker records retain report-backed classification,
+  acceptance criteria, source references, and stable IDs.
 - Optimistic concurrency, idempotency keys, database-triggered audit history,
   and synchronization jobs. Roadmap mutations never create Git commits.
-- A responsive React public roadmap focused on change, priority, kind, and
-  status, plus a documented public JSON API.
+- A focused version-by-version React roadmap at `roadmap.sakuracord.app` and a
+  complete status tracker at `tracker.sakuracord.app`, backed by one Worker and
+  documented JSON API.
 - Authenticated maintainer mutation endpoints with explicit lifecycle gates.
-- A simplified, feature-name-only Discord projection that edits one existing
-  message and skips unchanged visible hashes.
+- A version-based Discord projection that edits one existing message and skips
+  unchanged visible hashes.
 - Feature Request and Bug Report forum ingestion, bot-mentioned follow-up evidence,
   attachments, reactions, moderated status tags, reconciliation, and
   active/archived thread support.
@@ -29,7 +30,7 @@ independent D1 database.
 - An independently deployable
   [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot) using
   free-tier Cloudflare scheduled reconciliation and queued GitHub notifications.
-- A protocol-native MCP server with 13 canonical roadmap tools plus optional
+- A protocol-native MCP server with 19 canonical roadmap and tracker tools plus optional
   read-only application-repository inspection.
 - A valid Codex plugin and roadmap-management skill.
 - A resumable, idempotent setup/doctor/deploy/upgrade CLI.
@@ -42,7 +43,8 @@ independent D1 database.
 
 ```mermaid
 flowchart LR
-  UI["Public React roadmap"] --> API["Cloudflare Worker API"]
+  UI["Version roadmap"] --> API["Cloudflare Worker API"]
+  TR["Detailed tracker"] --> API
   MCP["Codex plugin / MCP"] --> API
   DI["Discord interactions"] --> API
   BOT["DiscordBot scheduled sync"] --> API
@@ -58,9 +60,10 @@ flowchart LR
   API --> GR["GitHub Release API"]
 ```
 
-The D1 document is authoritative. Discord messages, forum tags, the public UI,
-and MCP responses are projections of the same rows. Audit triggers insert the
-before/after document and enqueue synchronization in the same database mutation.
+The D1 documents are authoritative. Version rows drive the public roadmap and
+Discord message; item rows drive the detailed Tracker and forum tags. MCP can
+manage both through the same revision-safe engine. Audit history and
+synchronization work are recorded in the same database mutation.
 
 ## Quick start
 

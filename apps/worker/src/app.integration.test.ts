@@ -9,13 +9,17 @@ import { bytesToBase64Url } from "./crypto-store.js";
 describe("public and maintainer API", () => {
   let miniflare: Miniflare;
   let env: Env;
+  let pendingWaitUntil: Promise<unknown>[] = [];
   const app = createApp();
   const executionContext = {
-    waitUntil() {},
+    waitUntil(promise: Promise<unknown>) {
+      pendingWaitUntil.push(promise);
+    },
     passThroughOnException() {},
   } as unknown as ExecutionContext;
 
   beforeEach(async () => {
+    pendingWaitUntil = [];
     miniflare = new Miniflare({
       modules: true,
       script: "export default { fetch() { return new Response('ok') } }",
@@ -30,6 +34,7 @@ describe("public and maintainer API", () => {
       "0005_report_job_recovery.sql",
       "0006_streamline_roadmap_items.sql",
       "0007_recover_automation_jobs.sql",
+      "0008_version_roadmap.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration
@@ -49,7 +54,10 @@ describe("public and maintainer API", () => {
     };
   });
 
-  afterEach(async () => miniflare.dispose());
+  afterEach(async () => {
+    await Promise.allSettled(pendingWaitUntil);
+    await miniflare.dispose();
+  });
 
   it("creates, replays, lists, updates, conflicts, and exposes audit history", async () => {
     const createBody = {
@@ -102,6 +110,59 @@ describe("public and maintainer API", () => {
     expect((await stale.json<any>()).error.code).toBe("REVISION_CONFLICT");
 
     const history = await call(`/api/v1/items/${id}/history`);
+    expect((await history.json<any>()).data).toHaveLength(2);
+  });
+
+  it("publishes a version roadmap and keeps its Discord projection in sync", async () => {
+    const created = await call("/api/v1/versions", {
+      method: "POST",
+      headers: mutationHeaders("api-create-version-010"),
+      body: JSON.stringify({
+        version: "0.1.0",
+        title: "A faster foundation",
+        summary: "Performance and first-class conversations.",
+        state: "draft",
+        position: 10,
+        highlights: [
+          {
+            title: "Rewrite the timeline for performance",
+            linkedTrackerItemIds: [],
+          },
+        ],
+      }),
+    });
+    expect(created.status).toBe(201);
+    const draft = (await created.json<any>()).data.after;
+
+    const published = await call(`/api/v1/versions/${draft.id}/transition`, {
+      method: "POST",
+      headers: mutationHeaders("api-plan-version-010"),
+      body: JSON.stringify({ expectedRevision: 1, to: "planned" }),
+    });
+    expect(published.status).toBe(200);
+
+    const versions = await call("/api/v1/versions");
+    await expect(versions.json<any>()).resolves.toMatchObject({
+      data: [{ version: "0.1.0", state: "planned", revision: 2 }],
+    });
+    const projection = await call("/api/v1/discord/projection");
+    await expect(projection.json<any>()).resolves.toMatchObject({
+      data: {
+        versions: [
+          {
+            version: "0.1.0",
+            highlights: [{ title: "Rewrite the timeline for performance" }],
+          },
+        ],
+      },
+    });
+    const events = await call("/api/v1/versions/events");
+    expect(events.status).toBe(200);
+    expect(events.headers.get("content-type")).toContain("text/event-stream");
+    expect(await events.text()).toContain('event: versions\ndata: {"data":[{');
+    const history = await call(`/api/v1/manage/version-history?versionId=${draft.id}`, {
+      headers: { Authorization: `Bearer ${env.ROADMAP_ADMIN_TOKEN}` },
+    });
     expect((await history.json<any>()).data).toHaveLength(2);
   });
 

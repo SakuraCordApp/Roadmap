@@ -19,7 +19,11 @@ import {
   configureReleaseAutomation,
   connectReleaseAi,
 } from "./releases.js";
-import { generateTagIconPayloads, loadTagIconTheme } from "./tag-icons.js";
+import {
+  generateRoadmapTimelineEmojiPayloads,
+  generateTagIconPayloads,
+  loadTagIconTheme,
+} from "./tag-icons.js";
 
 interface SetupOptions {
   dryRun?: boolean;
@@ -428,6 +432,7 @@ export async function setup(context: CliContext, options: SetupOptions): Promise
   const runtimePending =
     discord &&
     (!stepComplete(state, "discord_forum_taxonomy") ||
+      !stepComplete(state, "discord_roadmap_emojis") ||
       !stepComplete(state, "discord_projection") ||
       !stepComplete(state, "discord_reconciliation") ||
       (answers.gatewayProvider === "cloudflare" && !stepComplete(state, "discord_gateway")));
@@ -1274,8 +1279,9 @@ export async function finishDiscordRuntime(
   repair = false,
 ): Promise<void> {
   const api = new CliApiClient(answers.publicUrl, roadmapToken);
+  const iconTheme = await loadTagIconTheme(context.root);
   if (!stepComplete(state, "discord_forum_taxonomy") || repair) {
-    const icons = await generateTagIconPayloads(await loadTagIconTheme(context.root));
+    const icons = await generateTagIconPayloads(iconTheme);
     const configured = await api.post("/api/v1/discord/forums/configure", {
       icons,
       replaceIconKeys: repair ? Object.keys(icons) : [],
@@ -1298,6 +1304,23 @@ export async function finishDiscordRuntime(
       "discord_forum_taxonomy",
       "complete",
       `${forums.length} forums unified with ${Object.keys(icons).length} generated emoji`,
+    );
+  }
+  if (!stepComplete(state, "discord_roadmap_emojis") || repair) {
+    const emojis = await generateRoadmapTimelineEmojiPayloads(iconTheme);
+    const configured = await api.post("/api/v1/discord/roadmap-emojis/configure", {
+      emojis,
+      replaceKeys: repair ? Object.keys(emojis) : [],
+    });
+    const installed = Array.isArray(configured.data) ? configured.data : [];
+    if (installed.length !== 2) {
+      throw new Error("Discord did not provision both roadmap timeline emojis.");
+    }
+    await markStep(
+      context,
+      "discord_roadmap_emojis",
+      "complete",
+      "Roadmap line and release-point emojis provisioned",
     );
   }
   if (!stepComplete(state, "discord_projection") || repair) {
@@ -1450,7 +1473,10 @@ function planEntryComplete(state: SetupState, target: string): boolean {
     "Cloudflare Worker secrets": ["cloudflare_secrets"],
     "Cloudflare Worker": ["cloudflare_deploy"],
     "Discord secrets, application resources, tags, and permissions": ["discord_configuration"],
-    "Discord forum taxonomy and color-derived emojis": ["discord_forum_taxonomy"],
+    "Discord forum taxonomy and color-derived emojis": [
+      "discord_forum_taxonomy",
+      "discord_roadmap_emojis",
+    ],
     "Discord-aware Cloudflare Worker configuration": ["discord_deployment"],
     "Discord channels, active/archive threads, and roadmap/release message permissions": [
       "discord_verification",
@@ -1459,6 +1485,7 @@ function planEntryComplete(state: SetupState, target: string): boolean {
     "Codex local marketplace plugin": ["codex_installation"],
     "initial roadmap data": ["initial_data"],
     "Discord roadmap message, forum state, and selected Gateway": [
+      "discord_roadmap_emojis",
       "discord_projection",
       "discord_reconciliation",
       "discord_gateway",

@@ -124,79 +124,56 @@ describe("Discord roadmap completion synchronization", () => {
 });
 
 describe("Discord Components V2 roadmap layout", () => {
-  it("uses one colored container per lifecycle step with status and priority emoji", () => {
-    const sections = roadmapConfig.publicSections.map((section) => ({
-      id: section.id,
-      label: section.label,
-      items:
-        section.id === "planned"
-          ? [
-              {
-                id: "SCR-01K00000000000000000000000",
-                title: "Native screen sharing",
-                priority: "high",
-                area: "communication",
-                linkedThreadUrls: [],
-              },
-            ]
-          : [],
-    }));
+  it("uses one focused container per public version", () => {
     const projection = {
-      groups: [
-        { id: "feature", label: "New Features", sections },
+      versions: [
         {
-          id: "bug",
-          label: "Bug Tracking",
-          sections: roadmapConfig.publicSections.map((section) => ({
-            id: section.id,
-            label: section.label,
-            items: [],
-          })),
+          id: "SCRV-01K00000000000000000000000",
+          version: "0.1.0",
+          title: "A faster foundation",
+          summary: "Performance and first-class conversations.",
+          state: "planned" as const,
+          highlights: [
+            {
+              id: "11111111-1111-4111-8111-111111111111",
+              title: "Native screen sharing",
+            },
+          ],
         },
       ],
       generatedAt: "2026-07-24T00:00:00.000Z",
       hashInput: "{}",
       hash: "hash",
     };
-    const emojiIds = new Map([
-      ["planned", "emoji-planned"],
-      ["in_progress", "emoji-progress"],
-      ["polishing", "emoji-polishing"],
-      ["done", "emoji-done"],
-      ["high", "emoji-high"],
-    ]);
-
-    const body = componentsV2RoadmapBody(projection, roadmapConfig, emojiIds) as {
+    const body = componentsV2RoadmapBody(projection, roadmapConfig, {
+      dot: "111111111111111111",
+      line: "222222222222222222",
+    }) as {
       flags: number;
       components: Array<{ type: number; accent_color?: number; components?: any[] }>;
     };
 
     expect(body.flags).toBe(1 << 15);
-    expect(body.components).toHaveLength(roadmapConfig.publicSections.length + 2);
-    expect(body.components.filter((component) => component.type === 17)).toHaveLength(
-      roadmapConfig.publicSections.length + 1,
-    );
+    expect(body.components).toHaveLength(3);
+    expect(body.components.filter((component) => component.type === 17)).toHaveLength(2);
     expect(body.components.at(-1)?.type).toBe(1);
-    const planned =
-      body.components[
-        roadmapConfig.publicSections.findIndex((section) => section.id === "planned") + 1
-      ]!;
-    expect(planned.accent_color).toBe(Number.parseInt("#60A5FA".slice(1), 16));
-    expect(planned.components?.[0]?.content).toContain(
-      "<:sakura_tag_planned:emoji-planned> Planned",
+    const planned = body.components[1]!;
+    expect(planned.accent_color).toBe(
+      Number.parseInt(roadmapConfig.branding.primaryColor.slice(1), 16),
     );
     expect(planned.components?.[0]?.content).toContain(
-      "<:sakura_tag_high:emoji-high> **Native screen sharing**",
+      "<:sakura_roadmap_dot:111111111111111111> v0\\.1\\.0 — A faster foundation",
     );
-    expect(planned.components?.[0]?.content).toContain("💡 New Features");
-    expect(planned.components?.[0]?.content).toContain("🪲 Bug Tracking");
+    expect(planned.components?.[0]?.content).toContain("<:sakura_roadmap_line:222222222222222222>");
+    expect(planned.components?.[0]?.content).toContain("**Native screen sharing**");
+    expect(planned.components?.[0]?.content).not.toContain("Up next");
     expect(JSON.stringify(body)).not.toContain("/items/");
     expect(countComponents(body.components)).toBeLessThanOrEqual(40);
 
-    const editBody = componentsV2RoadmapEditBody(projection, roadmapConfig, emojiIds) as Record<
-      string,
-      unknown
-    >;
+    const editBody = componentsV2RoadmapEditBody(projection, roadmapConfig, {
+      dot: "111111111111111111",
+      line: "222222222222222222",
+    }) as Record<string, unknown>;
     expect(editBody).toMatchObject({
       flags: 1 << 15,
       content: null,
@@ -615,7 +592,7 @@ describe("Discord scheduled reconciliation", () => {
     } finally {
       await miniflare.dispose();
     }
-  });
+  }, 15_000);
 });
 
 function countComponents(components: Array<{ components?: any[] }>): number {

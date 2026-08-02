@@ -1,8 +1,13 @@
 export function LoadingPage() {
   return (
-    <main id="main-content" className="state-page" aria-busy="true" aria-label="Loading roadmap">
+    <main
+      id="main-content"
+      className="state-page"
+      aria-busy="true"
+      aria-label="Loading SakuraCord plans"
+    >
       <img src="/brand/favicon.png" width="128" height="128" fetchPriority="high" alt="" />
-      <p>Loading the roadmap</p>
+      <p>Loading SakuraCord plans…</p>
       <span>Fetching the published changes.</span>
     </main>
   );
@@ -34,7 +39,7 @@ export function ErrorPage({ message }: { message: string }) {
   return (
     <main id="main-content" className="state-page state-page--error">
       <span className="state-code">ROADMAP_UNAVAILABLE</span>
-      <h1>The roadmap could not be loaded.</h1>
+      <h1>This page could not be loaded.</h1>
       <p>{message}</p>
       <button type="button" onClick={() => window.location.reload()}>
         Try again
@@ -46,7 +51,7 @@ export function ErrorPage({ message }: { message: string }) {
 export function InlineError({ message }: { message: string }) {
   return (
     <div className="inline-message inline-message--error" role="alert">
-      <strong>Roadmap items could not be loaded.</strong>
+      <strong>Changes could not be loaded.</strong>
       <span>{message}</span>
     </div>
   );

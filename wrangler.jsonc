@@ -7,7 +7,15 @@
     "directory": "apps/web/dist",
     "binding": "ASSETS",
     "not_found_handling": "single-page-application",
-    "run_worker_first": ["/api/*", "/interactions/*", "/webhooks/*", "/mcp*", "/healthz"],
+    "run_worker_first": [
+      "/api/*",
+      "/interactions/*",
+      "/webhooks/*",
+      "/mcp*",
+      "/healthz",
+      "/tracker*",
+      "/items/*",
+    ],
   },
   "d1_databases": [
     {
@@ -44,7 +52,7 @@
   },
   "vars": {
     "ROADMAP_PUBLIC_URL": "https://roadmap.sakuracord.app",
-    "ROADMAP_ALLOWED_ORIGINS": "https://roadmap.sakuracord.app",
+    "ROADMAP_ALLOWED_ORIGINS": "https://roadmap.sakuracord.app,https://tracker.sakuracord.app",
     "ROADMAP_GATEWAY_PROVIDER": "cloudflare",
   },
   "observability": {
@@ -55,6 +63,10 @@
   "routes": [
     {
       "pattern": "roadmap.sakuracord.app",
+      "custom_domain": true,
+    },
+    {
+      "pattern": "tracker.sakuracord.app",
       "custom_domain": true,
     },
   ],

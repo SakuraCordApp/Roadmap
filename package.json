@@ -15,6 +15,7 @@
     "dev": "npm run dev --workspace @roadmap/worker",
     "dev:web": "npm run dev --workspace @roadmap/web",
     "discord:configure-forums": "node scripts/configure-discord-forums.mjs",
+    "discord:configure-roadmap-emojis": "node scripts/configure-discord-roadmap-emojis.mjs",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint .",

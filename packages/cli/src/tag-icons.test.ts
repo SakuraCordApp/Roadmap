@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import sharp from "sharp";
-import { generateTagIconPayloads } from "./tag-icons.js";
+import { generateRoadmapTimelineEmojiPayloads, generateTagIconPayloads } from "./tag-icons.js";
 
 describe("setup-generated Discord tag icons", () => {
   it("renders every configured tag as a compact 128px PNG data URL", async () => {
@@ -34,6 +34,21 @@ describe("setup-generated Discord tag icons", () => {
       const image = Buffer.from(payload.split(",")[1]!, "base64");
       const metadata = await sharp(image).metadata();
       expect(metadata).toMatchObject({ format: "png", width: 128, height: 128 });
+      expect(image.byteLength).toBeLessThan(256_000);
+    }
+  });
+
+  it("renders matching transparent roadmap line and dot emojis", async () => {
+    const emojis = await generateRoadmapTimelineEmojiPayloads({
+      primaryColor: "#EF9BC4",
+      accentColor: "#CE6096",
+    });
+
+    expect(Object.keys(emojis)).toEqual(["line", "dot"]);
+    for (const payload of Object.values(emojis)) {
+      const image = Buffer.from(payload.split(",")[1]!, "base64");
+      const metadata = await sharp(image).metadata();
+      expect(metadata).toMatchObject({ format: "png", width: 128, height: 128, hasAlpha: true });
       expect(image.byteLength).toBeLessThan(256_000);
     }
   });

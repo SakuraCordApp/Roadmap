@@ -127,15 +127,24 @@ When an item reaches Done, the bot posts either “Bug fixed” or “Feature
 implemented”, then locks and archives the thread. Declined and Duplicate are
 also terminal and lock/archive their threads.
 
-## Simplified roadmap
+## Version roadmap
 
-The public Discord message contains only stable ID, feature title, lifecycle
-section, optional area, and public detail link. Default SakuraCord sections are
-Planned, In Progress, Polishing, and Recently Done.
+The roadmap channel shows the current release and planned versions, with a
+short ordered list of major highlights. It intentionally excludes the full bug
+and feature inventory; the Detailed tracker button opens
+`tracker.sakuracord.app` for that view.
 
-Components V2 use one Container with Text Displays, Separators, a public-roadmap
-link, and a subscription button. The message has `IS_COMPONENTS_V2` (`1 << 15`);
+Components V2 use a small header Container, one Container per visible version,
+and an action row with public-roadmap, detailed-tracker, and subscription
+buttons. Each version uses the `sakura_roadmap_dot` and `sakura_roadmap_line`
+guild emojis generated from `assets/discord-roadmap-emojis` so its vertical
+timeline matches the website. The message has `IS_COMPONENTS_V2` (`1 << 15`);
 traditional content is not mixed into it.
+
+Setup provisions both timeline emojis before publishing the roadmap. Existing
+instances can refresh them after deployment with
+`npm run discord:configure-roadmap-emojis`; this needs the bot's Manage
+Expressions permission and a maintainer API token.
 
 The Subscribe button does not maintain a second subscriber database. It
 directly adds or removes `discord.updatesRoleId` on the member and responds
@@ -145,6 +154,10 @@ announcements.
 The projection is sorted and SHA-256 hashed. If visible data did not change, the
 bot does not call Discord. It edits the stored message ID and only creates a new
 message when none exists or the configured one no longer exists.
+
+Every canonical version create, update, and transition queues that projection
+edit immediately, with the one-minute scheduled worker acting as retry and
+recovery rather than the primary update path.
 
 ## Rate limits and failure handling
 

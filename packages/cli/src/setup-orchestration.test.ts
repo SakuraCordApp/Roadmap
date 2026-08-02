@@ -136,6 +136,14 @@ beforeEach(async () => {
         ],
       });
     }
+    if (pathname === "/api/v1/discord/roadmap-emojis/configure") {
+      return Response.json({
+        data: [
+          { key: "line", id: "77777777777777771", name: "sakura_roadmap_line" },
+          { key: "dot", id: "77777777777777772", name: "sakura_roadmap_dot" },
+        ],
+      });
+    }
     if (pathname === "/api/v1/discord/publish") {
       return Response.json({ data: { messageId: "88888888888888888", changed: true } });
     }
@@ -232,6 +240,7 @@ describe("complete setup orchestration", () => {
       "ai:configure",
       "release:connect-ai",
       "api:/api/v1/discord/forums/configure",
+      "api:/api/v1/discord/roadmap-emojis/configure",
       "api:/api/v1/discord/publish",
       "api:/api/v1/reconcile",
       "api:/api/v1/discord/gateway/start",
@@ -344,6 +353,7 @@ describe("complete setup orchestration", () => {
       "ai:configure",
       "release:connect-ai",
       "api:/api/v1/discord/forums/configure",
+      "api:/api/v1/discord/roadmap-emojis/configure",
       "api:/api/v1/discord/publish",
       "api:/api/v1/reconcile",
       "api:/api/v1/discord/gateway/start",
@@ -433,6 +443,7 @@ describe("complete setup orchestration", () => {
       "ai:configure",
       "release:connect-ai",
       "api:/api/v1/discord/forums/configure",
+      "api:/api/v1/discord/roadmap-emojis/configure",
       "api:/api/v1/discord/publish",
       "api:/api/v1/reconcile",
       "api:/api/v1/discord/gateway/start",

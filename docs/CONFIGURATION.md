@@ -23,6 +23,10 @@ launching process environment.
     "idPrefix": "MPR",
     "description": "Public project description",
     "publicUrl": "https://roadmap.example.com",
+    "trackerUrl": "https://tracker.example.com",
+    "homeUrl": "https://example.com",
+    "discordUrl": "https://discord.gg/example",
+    "downloadUrl": "https://example.com/download",
     "applicationRepository": "/absolute/read-only/local/path",
     "documentationUrl": "https://docs.example.com",
     "contributionUrl": "https://github.com/example/project"
@@ -30,8 +34,8 @@ launching process environment.
 }
 ```
 
-The stable ID prefix is followed by a ULID. It must not change after records
-exist.
+The stable ID prefix is followed by a ULID. Version records insert `V` before
+the separator. The prefix must not change after records exist.
 
 ## Branding
 

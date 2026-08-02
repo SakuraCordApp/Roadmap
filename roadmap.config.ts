@@ -20,6 +20,10 @@ const defaults = defineRoadmapConfig({
     description:
       "Engineering roadmap for SakuraCord, a native Swift and SwiftUI macOS Discord client.",
     publicUrl: "https://roadmap.sakuracord.app",
+    trackerUrl: "https://tracker.sakuracord.app",
+    homeUrl: "https://sakuracord.app",
+    discordUrl: "https://discord.gg/hWNwFXkUTP",
+    downloadUrl: "https://sakuracord.app/download",
     applicationRepository: "/Users/super_original/Developer/My Own Projects/SakuraCord",
     contributionUrl: "https://github.com/SakuraCordApp/SakuraCord",
   },
@@ -117,7 +121,11 @@ const defaults = defineRoadmapConfig({
   },
   auth: {
     tokenIssuer: "sakuracord-roadmap",
-    allowedOrigins: ["https://roadmap.sakuracord.app", "http://localhost:5173"],
+    allowedOrigins: [
+      "https://roadmap.sakuracord.app",
+      "https://tracker.sakuracord.app",
+      "http://localhost:5173",
+    ],
   },
   deployment: {
     provider: "cloudflare",

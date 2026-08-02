@@ -7,3 +7,6 @@ export * from "./ports.js";
 export * from "./projection.js";
 export * from "./schema.js";
 export * from "./storage.js";
+export * from "./version.js";
+export * from "./version-engine.js";
+export * from "./version-storage.js";
