@@ -1076,7 +1076,6 @@ export function componentsV2RoadmapEditBody(
     content: null,
     embeds: [],
     attachments: [],
-    sticker_ids: [],
     poll: null,
   };
 }

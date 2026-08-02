@@ -179,9 +179,9 @@ describe("Discord Components V2 roadmap layout", () => {
       content: null,
       embeds: [],
       attachments: [],
-      sticker_ids: [],
       poll: null,
     });
+    expect(editBody).not.toHaveProperty("sticker_ids");
   });
 });
 
