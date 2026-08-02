@@ -162,7 +162,7 @@ describe("Discord Components V2 roadmap layout", () => {
       Number.parseInt(roadmapConfig.branding.primaryColor.slice(1), 16),
     );
     expect(planned.components?.[0]?.content).toContain(
-      "<:sakura_roadmap_dot:111111111111111111> v0\\.1\\.0 — A faster foundation",
+      "<:sakura_roadmap_dot:111111111111111111> **v0\\.1\\.0 — A faster foundation**",
     );
     expect(planned.components?.[0]?.content).toContain("<:sakura_roadmap_line:222222222222222222>");
     expect(planned.components?.[0]?.content).toContain("**Native screen sharing**");

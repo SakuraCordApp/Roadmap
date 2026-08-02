@@ -1003,7 +1003,7 @@ export function componentsV2RoadmapBody(
       components: [
         {
           type: 10,
-          content: `## ${dot} v${escapeDiscord(version.version)} — ${escapeDiscord(version.title)}\n${
+          content: `${dot} **v${escapeDiscord(version.version)} — ${escapeDiscord(version.title)}**\n${
             highlights.length ? highlights.join("\n") : "_Highlights are being prepared._"
           }`,
         },
