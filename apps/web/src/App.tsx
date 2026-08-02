@@ -113,13 +113,16 @@ function PageShell({
     };
   }, [menuOpen]);
 
-  const homeHref =
-    surface === "tracker" ? (config.project.trackerUrl ?? "/tracker") : config.project.publicUrl;
+  const mainSiteHref = config.project.homeUrl ?? "https://sakuracord.app";
   return (
     <>
       <header className="site-header" aria-label="Primary navigation">
         <div className="header-inner">
-          <a className="site-brand" href={homeHref} aria-label={`${config.project.name} home`}>
+          <a
+            className="site-brand"
+            href={mainSiteHref}
+            aria-label={`${config.project.name} home`}
+          >
             <img src={config.branding.iconUrl} width="42" height="42" fetchPriority="high" alt="" />
             <span translate="no">{config.project.name}</span>
           </a>
