@@ -1,17 +1,22 @@
 # Discord synchronization
 
 SakuraCord uses Cloudflare scheduled reconciliation rather than a persistent
-Discord Gateway process. The independently deployed DiscordBot Worker calls the
-authenticated `POST /api/v1/reconcile` endpoint every minute.
+Discord Gateway process. The Roadmap Worker reads the Discord forums from its
+own minute cron, then immediately drains newly discovered report-analysis work.
+This keeps report intake independent from the separately deployed DiscordBot
+Worker.
 
-Roadmap then reads the configured feature-request and bug-report forums through
+Roadmap reads the configured feature-request and bug-report forums through
 Discord REST, stores changed threads and messages in D1, re-runs report analysis
-when user-authored content changes, and reconciles roadmap status tags.
+when user-authored content changes, and reconciles roadmap status tags. The
+authenticated `POST /api/v1/reconcile` endpoint remains available as a
+compatibility and manual trigger, and also starts analysis after discovery.
 
-## Required DiscordBot configuration
+## Optional DiscordBot compatibility trigger
 
-Set the deployed Roadmap URL in DiscordBot's `wrangler.jsonc`, then store a
-Roadmap maintainer token only in Cloudflare:
+The independently deployed DiscordBot can still trigger reconciliation. If that
+compatibility path is enabled, set the deployed Roadmap URL in DiscordBot's
+`wrangler.jsonc`, then store a Roadmap maintainer token only in Cloudflare:
 
 ```sh
 npx wrangler secret put ROADMAP_TOKEN

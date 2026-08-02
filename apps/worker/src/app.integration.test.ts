@@ -224,6 +224,37 @@ describe("public and maintainer API", () => {
     expect(unauthedCompletion.status).toBe(403);
   });
 
+  it("starts report processing immediately after forum reconciliation", async () => {
+    const originalFetch = globalThis.fetch;
+    env.DISCORD_BOT_TOKEN = "discord-bot-token-for-tests";
+    globalThis.fetch = async (input) => {
+      const pathname = new URL(String(input)).pathname;
+      if (pathname.endsWith("/users/@me")) return Response.json({ id: "roadmap-bot" });
+      if (pathname.includes("/threads/active")) {
+        return Response.json({ threads: [] });
+      }
+      if (pathname.includes("/threads/archived/public")) {
+        return Response.json({ threads: [], has_more: false });
+      }
+      return Response.json({ id: "ok" });
+    };
+
+    try {
+      const response = await call("/api/v1/reconcile", {
+        method: "POST",
+        headers: mutationHeaders("api-reconcile-and-process"),
+      });
+      expect(response.status).toBe(200);
+      await expect(response.json<any>()).resolves.toEqual({
+        data: { threads: 0, messages: 0, errors: [] },
+      });
+      expect(pendingWaitUntil).toHaveLength(1);
+      await expect(Promise.all(pendingWaitUntil)).resolves.toEqual([{ processed: 0, failed: 0 }]);
+    } finally {
+      globalThis.fetch = originalFetch;
+    }
+  });
+
   it("clones immutable asset headers before security middleware modifies them", async () => {
     env.ASSETS = {
       fetch: async () => Response.redirect("https://roadmap.sakuracord.app/", 302),

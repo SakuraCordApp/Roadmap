@@ -3,6 +3,7 @@ import { processPendingInteractionJobs } from "./discord/interactions.js";
 import type { Env } from "./env.js";
 import { processPendingReleaseJobs } from "./release-automation.js";
 import { ensureCurrentSchema } from "./schema-migrations.js";
+import { redactError } from "./security.js";
 
 const app = createApp();
 
@@ -20,10 +21,16 @@ export default {
         const config = (await import("../../../roadmap.config.js")).default;
         const engine = new RoadmapEngine(new D1RoadmapStorage(env.DB), config);
         const sync = new DiscordSyncService(env, config, engine);
-        await processPendingInteractionJobs(env, config, engine, 5);
-        await sync.processPendingReportJobs(2);
-        await sync.processPendingJobs();
-        await processPendingReleaseJobs(env, config);
+        await runScheduledStep("Discord interaction processing", () =>
+          processPendingInteractionJobs(env, config, engine, 5),
+        );
+        // Discover reports in this Worker before draining the analysis queue.
+        // This keeps intake moving even when the compatibility DiscordBot
+        // scheduler is unavailable and lets new submissions run in this cycle.
+        await runScheduledStep("Discord reconciliation", () => sync.reconcile());
+        await runScheduledStep("Discord report analysis", () => sync.processPendingReportJobs(5));
+        await runScheduledStep("Discord synchronization", () => sync.processPendingJobs());
+        await runScheduledStep("release processing", () => processPendingReleaseJobs(env, config));
         await env.DB.prepare("DELETE FROM replay_nonces WHERE expires_at < datetime('now')").run();
         await env.DB.prepare(
           "DELETE FROM ai_oauth_requests WHERE expires_at < datetime('now','-1 day')",
@@ -49,3 +56,11 @@ export default {
     );
   },
 };
+
+async function runScheduledStep(name: string, task: () => Promise<unknown>): Promise<void> {
+  try {
+    await task();
+  } catch (error) {
+    console.error(`${name} failed`, redactError(error));
+  }
+}

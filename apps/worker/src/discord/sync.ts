@@ -214,7 +214,11 @@ export class DiscordSyncService {
            AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
          OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
        )
-       ORDER BY id LIMIT ?`,
+       ORDER BY
+         CASE status WHEN 'pending' THEN 0 WHEN 'processing' THEN 1 ELSE 2 END,
+         available_at,
+         id
+       LIMIT ?`,
     )
       .bind(MAX_AUTOMATION_ATTEMPTS, Math.min(Math.max(limit, 1), MAX_AUTOMATION_ATTEMPTS))
       .all<{ id: number; thread_id: string; attempts: number }>();
@@ -225,7 +229,8 @@ export class DiscordSyncService {
         `UPDATE discord_report_jobs
          SET status='processing',locked_at=datetime('now'),attempts=attempts+1
          WHERE id=? AND attempts < ? AND (
-           status IN ('pending','failed')
+           (status IN ('pending','failed')
+             AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
            OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
          )`,
       )

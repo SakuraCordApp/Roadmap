@@ -594,6 +594,74 @@ describe("Discord scheduled reconciliation", () => {
       await miniflare.dispose();
     }
   }, 15_000);
+
+  it("processes a fresh report before retrying an older failed report", async () => {
+    const miniflare = new Miniflare({
+      modules: true,
+      script: "export default { fetch() { return new Response('ok') } }",
+      d1Databases: ["DB"],
+    });
+    try {
+      const db = (await miniflare.getD1Database("DB")) as unknown as D1Database;
+      for (const name of [
+        "0001_initial.sql",
+        "0003_report_automation.sql",
+        "0004_reliable_jobs.sql",
+      ]) {
+        const migration = await readFile(path.resolve("migrations", name), "utf8");
+        for (const statement of migration
+          .split(/;\n\n/)
+          .map((value) => value.trim())
+          .filter(Boolean)) {
+          await db.prepare(statement).run();
+        }
+      }
+
+      const forumId = roadmapConfig.discord.bugReportsForumId!;
+      const guildId = roadmapConfig.discord.guildId!;
+      for (const [threadId, title] of [
+        ["older-failed-report", "Older failed report"],
+        ["fresh-pending-report", "Fresh pending report"],
+      ]) {
+        await db
+          .prepare(
+            `INSERT INTO discord_submissions(
+               thread_id,forum_id,guild_id,kind,title,created_at,updated_at
+             ) VALUES(?,?,?,?,?,datetime('now'),datetime('now'))`,
+          )
+          .bind(threadId, forumId, guildId, "bug_report", title)
+          .run();
+      }
+      await db
+        .prepare(
+          `INSERT INTO discord_report_jobs(thread_id,status,available_at)
+           VALUES('older-failed-report','failed',datetime('now','-1 hour'))`,
+        )
+        .run();
+      await db
+        .prepare(
+          `INSERT INTO discord_report_jobs(thread_id,status,available_at)
+           VALUES('fresh-pending-report','pending',datetime('now'))`,
+        )
+        .run();
+
+      const sync = new DiscordSyncService({ DB: db } as Env, roadmapConfig, {} as RoadmapEngine);
+      await expect(sync.processPendingReportJobs(1)).resolves.toEqual({
+        processed: 0,
+        failed: 1,
+      });
+
+      const jobs = await db
+        .prepare("SELECT thread_id,attempts FROM discord_report_jobs ORDER BY id")
+        .all<{ thread_id: string; attempts: number }>();
+      expect(jobs.results).toEqual([
+        { thread_id: "older-failed-report", attempts: 0 },
+        { thread_id: "fresh-pending-report", attempts: 1 },
+      ]);
+    } finally {
+      await miniflare.dispose();
+    }
+  });
 });
 
 function countComponents(components: Array<{ components?: any[] }>): number {

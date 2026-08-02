@@ -583,6 +583,15 @@ export function createApp() {
   app.post("/api/v1/reconcile", async (context) => {
     await authorizeMutation(context.req.raw, context.env);
     const result = await context.var.sync.reconcile();
+    context.executionCtx.waitUntil(
+      context.var.sync
+        .processPendingReportJobs(5)
+        .then(() => context.var.sync.processPendingJobs(20))
+        .catch((error) => {
+          console.error("Post-reconciliation processing failed", redactError(error));
+          return { processed: 0, failed: 1 };
+        }),
+    );
     return context.json({ data: result });
   });
 

@@ -25,8 +25,9 @@ curl -X POST "$ROADMAP_API_URL/api/v1/discord/reports/process" \
   --data '{"limit":2}'
 ```
 
-The minute cron retries report analysis before processing ordinary Discord
-synchronization jobs.
+The minute cron discovers forum changes first, processes up to five fresh
+reports, and then processes ordinary Discord synchronization jobs. A failure in
+one stage is logged without preventing the remaining stages from running.
 
 ## Backup
 
