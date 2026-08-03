@@ -4,59 +4,44 @@ import { ListIcon } from "@phosphor-icons/react/dist/csr/List";
 import { ListChecksIcon } from "@phosphor-icons/react/dist/csr/ListChecks";
 import { MapTrifoldIcon } from "@phosphor-icons/react/dist/csr/MapTrifold";
 import { useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { fetchConfig, type PublicConfig } from "./api.js";
+import type { PublicConfig } from "./api.js";
 import { DiscordMark } from "./DiscordMark.js";
-import { type LoadState, toMessage } from "./load-state.js";
+import { initialPublicConfig } from "./initial-config.js";
 import { ItemDetail } from "./ItemDetail.js";
 import { RoadmapTimeline } from "./RoadmapTimeline.js";
 import { TrackerOverview } from "./RoadmapOverview.js";
-import { ErrorPage, LoadingPage } from "./ui.js";
 
 export function App() {
   const detailMatch = /^\/items\/([^/]+)\/?$/.exec(window.location.pathname);
   const detailId = detailMatch ? decodePathSegment(detailMatch[1]!) : null;
-  const [config, setConfig] = useState<LoadState<PublicConfig>>({ state: "loading" });
+  const config = initialPublicConfig;
+  const surface = resolveSurface(config, detailId);
 
   useEffect(() => {
-    const controller = new AbortController();
-    fetchConfig(controller.signal)
-      .then((value) => {
-        setConfig({ state: "ready", value });
-        const surface = resolveSurface(value, detailId);
-        document.title =
-          surface === "roadmap"
-            ? `${value.project.name} Roadmap`
-            : detailId
-              ? `${value.project.name} Tracker item`
-              : `${value.project.name} Tracker`;
-      })
-      .catch((error: unknown) => {
-        if (!controller.signal.aborted) setConfig({ state: "error", message: toMessage(error) });
-      });
-    return () => controller.abort();
-  }, [detailId]);
+    document.title =
+      surface === "roadmap"
+        ? `${config.project.name} Roadmap`
+        : detailId
+          ? `${config.project.name} Tracker item`
+          : `${config.project.name} Tracker`;
+  }, [config.project.name, detailId, surface]);
 
-  if (config.state === "loading") return <LoadingPage />;
-  if (config.state === "error") return <ErrorPage message={config.message} />;
-
-  const value = config.value;
-  const surface = resolveSurface(value, detailId);
   const theme = {
-    "--brand-soft": value.branding.primaryColor,
-    "--brand-strong": value.branding.accentColor,
-    "--canvas": value.branding.backgroundColor,
-    "--font-fallback": value.branding.fontFamily,
+    "--brand-soft": config.branding.primaryColor,
+    "--brand-strong": config.branding.accentColor,
+    "--canvas": config.branding.backgroundColor,
+    "--font-fallback": config.branding.fontFamily,
   } as CSSProperties;
 
   return (
     <div className="app-shell" style={theme}>
-      <PageShell config={value} surface={surface}>
+      <PageShell config={config} surface={surface}>
         {detailId ? (
-          <ItemDetail config={value} id={detailId} />
+          <ItemDetail config={config} id={detailId} />
         ) : surface === "tracker" ? (
-          <TrackerOverview config={value} />
+          <TrackerOverview config={config} />
         ) : (
-          <RoadmapTimeline config={value} />
+          <RoadmapTimeline config={config} />
         )}
       </PageShell>
     </div>
