@@ -2,11 +2,15 @@
 
 ## Guided setup
 
-The Roadmap and DiscordBot repositories are independent clones. For a
-Cloudflare synchronization installation, deploy
-[`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot) first
-with a Roadmap maintainer `ROADMAP_TOKEN`. No sibling directory, workspace
-link, or unpublished package is required.
+The Roadmap and DiscordBot repositories are independent clones. For a manual
+Cloudflare synchronization installation, create the report queue once before
+the Roadmap deployment. The production Workers Build creates it idempotently
+when it is absent. The independently deployed DiscordBot handles GitHub
+notifications only and does not need a Roadmap maintainer token.
+
+```sh
+npx wrangler queues create sakuracord-discord-reports
+```
 
 Build the CLI, inspect the plan, then apply:
 
@@ -45,8 +49,7 @@ The wizard:
     lifecycle colors and applies the unified taxonomy to both forums;
 18. publishes the persistent simplified roadmap message and reconciles both
     forums; and
-19. starts and verifies the independently deployed DiscordBot scheduled
-    reconciliation when the Cloudflare provider is selected.
+19. starts and verifies the Roadmap Worker's scheduled reconciliation aliases.
 
 Progress is journaled in ignored `.roadmap/setup-state.json`, and non-secret
 wizard answers are cached in ignored `.roadmap/setup-answers.json`. Rerunning
@@ -142,6 +145,7 @@ npx wrangler login
 npx wrangler d1 create my-project-roadmap
 # Put the returned database_id in wrangler.jsonc.
 npx wrangler d1 migrations apply my-project-roadmap --remote
+npx wrangler queues create sakuracord-discord-reports
 npx wrangler secret put ROADMAP_ADMIN_TOKEN
 npx wrangler secret put DISCORD_BOT_TOKEN
 npx wrangler secret put DISCORD_APPLICATION_ID
@@ -154,14 +158,15 @@ npx wrangler deploy
 curl -fsS https://roadmap.example.com/healthz
 ```
 
-For the Cloudflare synchronization provider, deploy the separate DiscordBot after
-storing its matching secrets:
+Deploy the separate DiscordBot only when GitHub-to-Discord notifications are
+wanted:
 
 ```sh
 git clone https://github.com/SakuraCordApp/DiscordBot.git
 cd DiscordBot
 npm install
-npx wrangler secret put ROADMAP_TOKEN
+npx wrangler secret put DISCORD_BOT_TOKEN
+npx wrangler secret put GITHUB_WEBHOOK_SECRET
 npm run deploy
 ```
 
@@ -177,15 +182,18 @@ the configured hostname.
 
 The production Worker is connected to `SakuraCordApp/Roadmap` through
 Cloudflare Workers Builds. Pushes to `main` run `npm run check` and then
-`npx wrangler deploy`. Before the new application schema handles traffic, the
-Worker applies any supported pending compatibility migration transactionally
-and records it in Wrangler's `d1_migrations` ledger. This keeps an automated
-code deployment from exposing a newer Worker to an older D1 schema. Runtime
-secrets remain in Cloudflare rather than GitHub. DiscordBot has its own
-independent Workers Builds connection and deploy gate.
+`npx wrangler deploy`. The check command recognizes Cloudflare's injected
+`WORKERS_CI=1` marker and idempotently creates the report queue before the
+deploy step; local checks never create Cloudflare resources. Before the new
+application schema handles traffic, the Worker applies any supported pending
+compatibility migration transactionally and records it in Wrangler's
+`d1_migrations` ledger. This keeps an automated code deployment from exposing
+a newer Worker to an older D1 schema. Runtime secrets remain in Cloudflare
+rather than GitHub. DiscordBot has its own independent deployment gate.
 
 ## Deployment boundary
 
 Repository build and local validation require no credentials. Deployment,
-resource creation, secret writes, Discord registration, and write tests happen
-only when a developer explicitly runs the corresponding command.
+secret writes, Discord registration, and write tests happen only when a
+developer explicitly runs the corresponding command. Production resource
+creation may also run idempotently inside the GitHub-triggered Workers Build.

@@ -432,6 +432,9 @@ describe("Discord scheduled reconciliation", () => {
         .run();
 
       const requests: Array<{ method: string; path: string }> = [];
+      const queueSend = vi.fn(async () => ({
+        metadata: { metrics: { backlogCount: 1, backlogBytes: 100 } },
+      }));
       const reportContent = "Messages overlap after loading history.";
       let followUpContent = "Unrelated conversation.";
       let followUpMentions: Array<{ id: string }> = [];
@@ -492,6 +495,7 @@ describe("Discord scheduled reconciliation", () => {
       const env = {
         DB: db,
         DISCORD_BOT_TOKEN: "discord-bot-token-for-tests",
+        DISCORD_REPORTS_QUEUE: { send: queueSend } as unknown as Queue,
       } as Env;
       const engine = {} as RoadmapEngine;
       const sync = new DiscordSyncService(env, roadmapConfig, engine);
@@ -506,6 +510,9 @@ describe("Discord scheduled reconciliation", () => {
         .bind(threadId)
         .first<{ status: string; count: number }>();
       expect(job).toEqual({ status: "pending", count: 1 });
+      expect(queueSend).toHaveBeenCalledWith(expect.objectContaining({ threadId }), {
+        contentType: "json",
+      });
       await db
         .prepare(
           "UPDATE discord_report_jobs SET status='processing',locked_at=datetime('now') WHERE thread_id=?",

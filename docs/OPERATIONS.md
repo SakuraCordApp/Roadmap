@@ -13,8 +13,8 @@ Monitor `/api/v1/sync/status` for pending, processing, or failed jobs. Failed
 jobs retain a redacted error and exponential retry time. Reconciliation is safe
 to rerun.
 
-The protected Discord report endpoints expose and drain the separate
-attachment-analysis queue:
+The protected Discord report endpoints expose and manually drain the durable D1
+recovery jobs that back the Cloudflare report queue:
 
 ```sh
 curl -X POST "$ROADMAP_API_URL/api/v1/discord/reports/status" \
@@ -25,9 +25,11 @@ curl -X POST "$ROADMAP_API_URL/api/v1/discord/reports/process" \
   --data '{"limit":2}'
 ```
 
-The minute cron discovers forum changes first, processes up to five fresh
-reports, and then processes ordinary Discord synchronization jobs. A failure in
-one stage is logged without preventing the remaining stages from running.
+The minute cron discovers newest active forum reports before archived repair
+work. New or changed reports publish a thread-ID message to
+`sakuracord-discord-reports`; its one-message consumer processes analysis
+immediately. The cron drains up to two stranded D1 jobs before discovery as a
+fallback when queue publication or delivery was temporarily unavailable.
 
 ## Backup
 

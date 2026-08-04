@@ -29,8 +29,7 @@ independent D1 database.
 - Cloudflare Worker, D1, cron, and static assets.
 - An independently deployable
   [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot) using
-  free-tier Cloudflare queues for GitHub notifications and an optional
-  compatibility reconciliation trigger.
+  free-tier Cloudflare queues for GitHub notifications.
 - A protocol-native MCP server with 19 canonical roadmap and tracker tools plus optional
   read-only application-repository inspection.
 - A valid Codex plugin and roadmap-management skill.
@@ -49,13 +48,12 @@ flowchart LR
   MCP["Codex plugin / MCP"] --> API
   DI["Discord interactions"] --> API
   CRON["Roadmap minute cron"] --> API
-  BOT["DiscordBot compatibility trigger"] --> API
   API --> SYNC["Discord sync core"]
   API --> CORE["Typed roadmap engine"]
-  API --> SYNC
   CORE --> D1[("Canonical D1 database")]
-  D1 --> JOBS["Idempotent sync jobs"]
-  JOBS --> SYNC
+  SYNC --> D1
+  SYNC --> RQ[("Discord report queue")]
+  RQ --> SYNC
   SYNC --> DR["Discord REST API"]
   GH["GitHub release webhook"] --> API
   API --> AI["ChatGPT OAuth transport"]
@@ -84,7 +82,7 @@ configures the project taxonomy, Cloudflare/D1, Discord, MCP, Codex, and optiona
 initial data. It never writes tokens to tracked files. Forum synchronization
 runs in the Roadmap Worker. Deploy
 [DiscordBot](https://github.com/SakuraCordApp/DiscordBot) separately when queued
-GitHub-to-Discord notifications or the compatibility trigger are wanted.
+GitHub-to-Discord notifications are wanted.
 
 For local-only development:
 

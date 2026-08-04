@@ -50,6 +50,23 @@
   "triggers": {
     "crons": ["* * * * *"],
   },
+  "queues": {
+    "producers": [
+      {
+        "binding": "DISCORD_REPORTS_QUEUE",
+        "queue": "sakuracord-discord-reports",
+      },
+    ],
+    "consumers": [
+      {
+        "queue": "sakuracord-discord-reports",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 10,
+        "retry_delay": 5,
+      },
+    ],
+  },
   "vars": {
     "ROADMAP_PUBLIC_URL": "https://roadmap.sakuracord.app",
     "ROADMAP_ALLOWED_ORIGINS": "https://roadmap.sakuracord.app,https://tracker.sakuracord.app",

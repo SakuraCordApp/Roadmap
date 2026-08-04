@@ -21,9 +21,9 @@ The Roadmap Worker owns scheduled forum reconciliation and Discord's HTTP
 interactions endpoint, so report intake has one self-contained runtime and no
 always-on Node gateway is required. The separate
 [`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot)
-repository owns GitHub-to-Discord notifications and retains a compatibility
-reconciliation trigger. Both repositories build and deploy without a local
-sibling checkout.
+repository owns GitHub-to-Discord notifications without triggering forum
+reconciliation. Both repositories build and deploy without a local sibling
+checkout.
 
 `packages/mcp` exposes the roadmap API through MCP. Local repository inspection
 is explicitly read-only and is absent from remote Worker mode.
@@ -72,9 +72,9 @@ bypass requires a non-empty override reason stored in history.
 Synchronization work is at-least-once and idempotent:
 
 - job keys are durable and unique;
-- forum reports have a separate lockable retry queue and stable thread key;
-- each minute discovers forum changes before prioritizing fresh report jobs
-  over retries, so a failing older report cannot block new intake;
+- forum reports have a stable D1 job record and a dedicated Cloudflare Queue;
+- each minute discovers newest active reports before archived repair work, and
+  a one-message queue consumer keeps analysis off the reconciliation path;
 - structured report analysis is schema-validated before canonical creation and
   is limited to fields supported by report text and attachments; repo-dependent
   planning fields are not part of the canonical model;

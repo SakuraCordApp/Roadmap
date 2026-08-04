@@ -11,7 +11,7 @@
   ],
   "scripts": {
     "build": "npm run build --workspace @roadmap/core && npm run build --workspace @roadmap/mcp && npm run build --workspace @roadmap/web && npm run build --workspace @roadmap/worker && npm run build --workspace @roadmap/cli",
-    "check": "npm run format:check && npm run worker-types:check && npm run lint && npm run typecheck && npm test && npm run build",
+    "check": "node scripts/ensure-workers-build-resources.mjs && npm run format:check && npm run worker-types:check && npm run lint && npm run typecheck && npm test && npm run build",
     "dev": "npm run dev --workspace @roadmap/worker",
     "dev:web": "npm run dev --workspace @roadmap/web",
     "discord:configure-forums": "node scripts/configure-discord-forums.mjs",

@@ -75,6 +75,5 @@ creation. A repository adapter that commits files is intentionally invalid.
 ## Discord synchronization development
 
 Keep scheduled forum reconciliation and all forum business logic in Roadmap.
-[`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot) may
-invoke the authenticated reconciliation endpoint as a compatibility trigger,
-but routine intake must not depend on that separate deployment.
+[`SakuraCordApp/DiscordBot`](https://github.com/SakuraCordApp/DiscordBot) owns
+GitHub-to-Discord notifications and must not invoke forum reconciliation.

@@ -28,6 +28,7 @@ import {
   type RoadmapEmojiPayloads,
   type TagIconPayloads,
 } from "./forums.js";
+import type { DiscordReportQueueMessage, DiscordReportQueueResult } from "./report-queue.js";
 import { DiscordRestClient, safeAllowedMentions } from "./rest.js";
 
 export interface DiscordMessage {
@@ -67,6 +68,18 @@ interface ArchivedThreadsResponse {
 interface ThreadMessageCheckpoint {
   lastMessageId: string | null;
   checkedAt: string;
+}
+
+interface ReportJobRecord {
+  id: number;
+  thread_id: string;
+  attempts: number;
+}
+
+interface ClaimedReportResult {
+  processed: boolean;
+  failed: boolean;
+  retryAfterSeconds?: number;
 }
 
 const ACTIVE_THREAD_FULL_REFRESH_MS = 60 * 60 * 1_000;
@@ -198,15 +211,7 @@ export class DiscordSyncService {
   }
 
   async processPendingReportJobs(limit = 2): Promise<{ processed: number; failed: number }> {
-    await this.env.DB.prepare(
-      `UPDATE discord_report_jobs
-       SET status='failed',locked_at=NULL,
-           last_error=COALESCE(last_error,'Report analysis exceeded its retry budget.')
-       WHERE status='processing' AND attempts >= ?
-         AND unixepoch(locked_at) <= unixepoch('now') - 300`,
-    )
-      .bind(MAX_AUTOMATION_ATTEMPTS)
-      .run();
+    await this.expireExhaustedReportJobs();
     const jobs = await this.env.DB.prepare(
       `SELECT id,thread_id,attempts FROM discord_report_jobs
        WHERE attempts < ? AND (
@@ -221,67 +226,146 @@ export class DiscordSyncService {
        LIMIT ?`,
     )
       .bind(MAX_AUTOMATION_ATTEMPTS, Math.min(Math.max(limit, 1), MAX_AUTOMATION_ATTEMPTS))
-      .all<{ id: number; thread_id: string; attempts: number }>();
+      .all<ReportJobRecord>();
     let processed = 0;
     let failed = 0;
     for (const job of jobs.results) {
-      const locked = await this.env.DB.prepare(
-        `UPDATE discord_report_jobs
-         SET status='processing',locked_at=datetime('now'),attempts=attempts+1
-         WHERE id=? AND attempts < ? AND (
-           (status IN ('pending','failed')
-             AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
-           OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
-         )`,
-      )
-        .bind(job.id, MAX_AUTOMATION_ATTEMPTS)
-        .run();
-      if (locked.meta.changes !== 1) continue;
-      try {
-        const result = await this.processReportJob(job.thread_id);
-        await this.env.DB.prepare(
-          `UPDATE discord_report_jobs
-           SET status=IIF(rerun_requested=1,'pending','complete'),
-               rerun_requested=0,analysis_json=?,
-               linked_item_id=IIF(?=1,?,linked_item_id),
-               completed_at=IIF(rerun_requested=1,NULL,datetime('now')),
-               available_at=IIF(
-                 rerun_requested=1,
-                 strftime('%Y-%m-%dT%H:%M:%fZ','now'),
-                 available_at
-               ),
-               locked_at=NULL,last_error=NULL
-           WHERE id=?`,
-        )
-          .bind(
-            JSON.stringify(result.analysis),
-            result.updateManagedItemId ? 1 : 0,
-            result.itemId,
-            job.id,
-          )
-          .run();
-        processed += 1;
-      } catch (error) {
-        const terminal = isTerminalAiAuthorizationError(error);
-        const delay = Math.min(3_600, 2 ** Math.min(job.attempts + 1, 10));
-        await this.env.DB.prepare(
-          `UPDATE discord_report_jobs
-           SET status='failed',attempts=IIF(?=1,?,attempts),last_error=?,
-               available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?),locked_at=NULL
-           WHERE id=?`,
-        )
-          .bind(
-            terminal ? 1 : 0,
-            MAX_AUTOMATION_ATTEMPTS,
-            redactError(error).slice(0, 2_000),
-            `+${delay} seconds`,
-            job.id,
-          )
-          .run();
-        failed += 1;
-      }
+      if (!(await this.claimReportJob(job.id))) continue;
+      const result = await this.processClaimedReportJob(job);
+      if (result.processed) processed += 1;
+      if (result.failed) failed += 1;
     }
     return { processed, failed };
+  }
+
+  async processQueuedReport(threadId: string): Promise<DiscordReportQueueResult> {
+    await this.expireExhaustedReportJobs();
+    const job = await this.env.DB.prepare(
+      `SELECT id,thread_id,attempts,status,available_at,locked_at,
+              CASE
+                WHEN status IN ('pending','failed') AND
+                     available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now') THEN 1
+                WHEN status='processing' AND
+                     unixepoch(locked_at) <= unixepoch('now') - 300 THEN 1
+                ELSE 0
+              END AS is_ready,
+              CASE
+                WHEN status IN ('pending','failed') THEN
+                  MAX(1,unixepoch(available_at)-unixepoch('now'))
+                WHEN status='processing' THEN
+                  MAX(1,unixepoch(locked_at)+300-unixepoch('now'))
+                ELSE 1
+              END AS wait_seconds
+       FROM discord_report_jobs WHERE thread_id=?`,
+    )
+      .bind(threadId)
+      .first<
+        ReportJobRecord & {
+          status: "pending" | "processing" | "complete" | "failed";
+          available_at: string;
+          locked_at: string | null;
+          is_ready: number;
+          wait_seconds: number;
+        }
+      >();
+    if (!job || job.status === "complete" || job.attempts >= MAX_AUTOMATION_ATTEMPTS) {
+      return { outcome: "ignored" };
+    }
+    if (job.is_ready !== 1) {
+      return { outcome: "retry", retryAfterSeconds: Number(job.wait_seconds) || 5 };
+    }
+    if (!(await this.claimReportJob(job.id))) {
+      return { outcome: "retry", retryAfterSeconds: 5 };
+    }
+    const result = await this.processClaimedReportJob(job);
+    if (result.retryAfterSeconds) {
+      return { outcome: "retry", retryAfterSeconds: result.retryAfterSeconds };
+    }
+    return { outcome: result.processed ? "processed" : "ignored" };
+  }
+
+  private async expireExhaustedReportJobs(): Promise<void> {
+    await this.env.DB.prepare(
+      `UPDATE discord_report_jobs
+       SET status='failed',locked_at=NULL,
+           last_error=COALESCE(last_error,'Report analysis exceeded its retry budget.')
+       WHERE status='processing' AND attempts >= ?
+         AND unixepoch(locked_at) <= unixepoch('now') - 300`,
+    )
+      .bind(MAX_AUTOMATION_ATTEMPTS)
+      .run();
+  }
+
+  private async claimReportJob(jobId: number): Promise<boolean> {
+    const locked = await this.env.DB.prepare(
+      `UPDATE discord_report_jobs
+       SET status='processing',locked_at=datetime('now'),attempts=attempts+1
+       WHERE id=? AND attempts < ? AND (
+         (status IN ('pending','failed')
+           AND available_at <= strftime('%Y-%m-%dT%H:%M:%fZ','now'))
+         OR (status='processing' AND unixepoch(locked_at) <= unixepoch('now') - 300)
+       )`,
+    )
+      .bind(jobId, MAX_AUTOMATION_ATTEMPTS)
+      .run();
+    return locked.meta.changes === 1;
+  }
+
+  private async processClaimedReportJob(job: ReportJobRecord): Promise<ClaimedReportResult> {
+    try {
+      const result = await this.processReportJob(job.thread_id);
+      await this.env.DB.prepare(
+        `UPDATE discord_report_jobs
+         SET status=IIF(rerun_requested=1,'pending','complete'),
+             rerun_requested=0,analysis_json=?,
+             linked_item_id=IIF(?=1,?,linked_item_id),
+             completed_at=IIF(rerun_requested=1,NULL,datetime('now')),
+             available_at=IIF(
+               rerun_requested=1,
+               strftime('%Y-%m-%dT%H:%M:%fZ','now'),
+               available_at
+             ),
+             locked_at=NULL,last_error=NULL
+         WHERE id=?`,
+      )
+        .bind(
+          JSON.stringify(result.analysis),
+          result.updateManagedItemId ? 1 : 0,
+          result.itemId,
+          job.id,
+        )
+        .run();
+      const saved = await this.env.DB.prepare("SELECT status FROM discord_report_jobs WHERE id=?")
+        .bind(job.id)
+        .first<{ status: string }>();
+      return {
+        processed: true,
+        failed: false,
+        ...(saved?.status === "pending" ? { retryAfterSeconds: 1 } : {}),
+      };
+    } catch (error) {
+      const terminal = isTerminalAiAuthorizationError(error);
+      const delay = Math.min(3_600, 2 ** Math.min(job.attempts + 1, 10));
+      await this.env.DB.prepare(
+        `UPDATE discord_report_jobs
+         SET status='failed',attempts=IIF(?=1,?,attempts),last_error=?,
+             available_at=strftime('%Y-%m-%dT%H:%M:%fZ','now',?),locked_at=NULL
+         WHERE id=?`,
+      )
+        .bind(
+          terminal ? 1 : 0,
+          MAX_AUTOMATION_ATTEMPTS,
+          redactError(error).slice(0, 2_000),
+          `+${delay} seconds`,
+          job.id,
+        )
+        .run();
+      return {
+        processed: false,
+        failed: true,
+        ...(terminal ? {} : { retryAfterSeconds: delay }),
+      };
+    }
   }
 
   async syncItem(itemId: string): Promise<void> {
@@ -344,30 +428,21 @@ export class DiscordSyncService {
     const active = await rest.get<{ threads: DiscordThread[] }>(
       `/guilds/${guildId}/threads/active`,
     );
-    const threads = active.threads.filter((thread) => forumIds.includes(thread.parent_id));
-    for (const forumId of forumIds) {
-      let before: string | undefined;
-      for (;;) {
-        const query = before ? `?before=${encodeURIComponent(before)}&limit=100` : "?limit=100";
-        const page = await rest.get<ArchivedThreadsResponse>(
-          `/channels/${forumId}/threads/archived/public${query}`,
-        );
-        threads.push(...page.threads);
-        if (!page.has_more || page.threads.length === 0) break;
-        before = page.threads.at(-1)?.thread_metadata?.archive_timestamp;
-        if (!before) break;
-      }
-    }
-    const unique = [...new Map(threads.map((thread) => [thread.id, thread])).values()];
+    const activeThreads = active.threads
+      .filter((thread) => forumIds.includes(thread.parent_id))
+      .sort((left, right) => discordThreadTimestamp(right) - discordThreadTimestamp(left));
+    const seen = new Set<string>();
     let messageCount = 0;
     const errors: string[] = [];
-    for (const thread of unique) {
+    const reconcileThread = async (thread: DiscordThread): Promise<void> => {
+      if (seen.has(thread.id)) return;
+      seen.add(thread.id);
       try {
         await this.upsertThread(thread);
-        // Queue a new report before crawling its message history so discovery
-        // does not depend on a complete history scan.
+        // Publish new work before crawling message history. The queue consumer
+        // fetches the starter itself, so a long repair crawl cannot delay it.
         await this.ensureReportAutomation(thread);
-        if (!(await this.shouldFetchThreadMessages(thread))) continue;
+        if (!(await this.shouldFetchThreadMessages(thread))) return;
         let reportChanged = false;
         let before: string | undefined;
         for (;;) {
@@ -387,9 +462,25 @@ export class DiscordSyncService {
       } catch (error) {
         errors.push(`${thread.id}: ${redactError(error)}`);
       }
+    };
+    // New active reports are the latency-sensitive path and always run before
+    // archived-thread drift repair.
+    for (const thread of activeThreads) await reconcileThread(thread);
+    for (const forumId of forumIds) {
+      let before: string | undefined;
+      for (;;) {
+        const query = before ? `?before=${encodeURIComponent(before)}&limit=100` : "?limit=100";
+        const page = await rest.get<ArchivedThreadsResponse>(
+          `/channels/${forumId}/threads/archived/public${query}`,
+        );
+        for (const thread of page.threads) await reconcileThread(thread);
+        if (!page.has_more || page.threads.length === 0) break;
+        before = page.threads.at(-1)?.thread_metadata?.archive_timestamp;
+        if (!before) break;
+      }
     }
     await this.setState("last_reconcile_at", new Date().toISOString());
-    return { threads: unique.length, messages: messageCount, errors };
+    return { threads: seen.size, messages: messageCount, errors };
   }
 
   async processPendingJobs(limit = 20): Promise<{ processed: number; failed: number }> {
@@ -863,6 +954,16 @@ export class DiscordSyncService {
         .bind(threadId)
         .run();
     }
+    const queue = this.env.DISCORD_REPORTS_QUEUE;
+    if (queue) {
+      await queue.send(
+        {
+          threadId,
+          queuedAt: new Date().toISOString(),
+        } satisfies DiscordReportQueueMessage,
+        { contentType: "json" },
+      );
+    }
   }
 
   private async ensureReportAutomation(thread: DiscordThread): Promise<void> {
@@ -1195,6 +1296,13 @@ export function reportCreatedContent(
 
 function colorValue(color: string): number {
   return Number.parseInt(color.slice(1), 16);
+}
+
+function discordThreadTimestamp(thread: DiscordThread): number {
+  const timestamp =
+    thread.thread_metadata?.create_timestamp ?? thread.thread_metadata?.archive_timestamp;
+  const parsed = timestamp ? Date.parse(timestamp) : Number.NaN;
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isDiscordStatus(error: unknown, status: number): boolean {
