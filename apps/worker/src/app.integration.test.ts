@@ -60,6 +60,13 @@ describe("public and maintainer API", () => {
     await miniflare.dispose();
   });
 
+  it("reports the current schema as healthy", async () => {
+    const response = await app.request("http://localhost/healthz", {}, env, executionContext);
+
+    expect(response.status).toBe(200);
+    await expect(response.json()).resolves.toMatchObject({ ok: true, schemaVersion: "9" });
+  });
+
   it("creates, replays, lists, updates, conflicts, and exposes audit history", async () => {
     const createBody = {
       title: "Full polls support",

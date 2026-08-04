@@ -9,6 +9,8 @@ import { bytesToBase64Url } from "./crypto-store.js";
 const oauthHarness = vi.hoisted(() => ({
   requests: [] as unknown[],
   oauthRequestOptions: [] as Array<{ redirectUri: string }>,
+  responseStatuses: [] as number[],
+  refreshes: 0,
 }));
 
 vi.mock("@openai-oauth/core", () => ({
@@ -31,10 +33,22 @@ vi.mock("@openai-oauth/core", () => ({
     expiresIn: 3_600,
     raw: {},
   })),
-  refreshOpenAIOAuthTokens: vi.fn(),
+  refreshOpenAIOAuthTokens: vi.fn(async () => {
+    oauthHarness.refreshes += 1;
+    return {
+      accessToken: "refreshed-access-token-secret",
+      refreshToken: "refreshed-refresh-token-secret",
+      idToken: "refreshed-id-token-secret",
+      accountId: "account-secret",
+      expiresIn: 3_600,
+      raw: {},
+    };
+  }),
   createOpenAIOAuthTransport: vi.fn(() => ({
     request: vi.fn(async (_path: string, init: RequestInit) => {
       oauthHarness.requests.push(JSON.parse(String(init.body)));
+      const status = oauthHarness.responseStatuses.shift() ?? 200;
+      if (status !== 200) return Response.json({ error: "rejected" }, { status });
       return Response.json({
         output: [
           {
@@ -70,6 +84,8 @@ describe("encrypted ChatGPT OAuth", () => {
   beforeEach(async () => {
     oauthHarness.requests.length = 0;
     oauthHarness.oauthRequestOptions.length = 0;
+    oauthHarness.responseStatuses.length = 0;
+    oauthHarness.refreshes = 0;
     miniflare = new Miniflare({
       modules: true,
       script: "export default { fetch() { return new Response('ok') } }",
@@ -196,5 +212,32 @@ describe("encrypted ChatGPT OAuth", () => {
         "SELECT status,attempts,locked_at,last_error FROM release_jobs WHERE release_id=10",
       ).first(),
     ).resolves.toEqual({ status: "pending", attempts: 0, locked_at: null, last_error: null });
+  });
+
+  it("forces one token refresh and retries after an authorization rejection", async () => {
+    const started = await beginAiOAuth(env);
+    expect(started.authorizationUrl).toContain("auth.openai.com");
+    await finishAiOAuth(env, "authorization-code", "oauth-state");
+    oauthHarness.requests.length = 0;
+    oauthHarness.responseStatuses.push(403, 200);
+
+    await expect(
+      generateStructuredReleaseCopy(env, roadmapConfig, {
+        tagName: "v1.2.0",
+        releaseName: "SakuraCord 1.2",
+        releaseUrl: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v1.2.0",
+        commits: [
+          {
+            sha: "a".repeat(40),
+            message: "Retry authorization",
+            author: "Maintainer",
+            committedAt: "2026-07-24T12:00:00Z",
+            url: `https://github.com/SakuraCordApp/SakuraCord/commit/${"a".repeat(40)}`,
+          },
+        ],
+      }),
+    ).resolves.toMatchObject({ discordTitle: "Release @\u200beveryone" });
+    expect(oauthHarness.refreshes).toBe(1);
+    expect(oauthHarness.requests).toHaveLength(2);
   });
 });

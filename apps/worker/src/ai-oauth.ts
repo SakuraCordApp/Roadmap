@@ -187,17 +187,11 @@ export async function generateStructuredReleaseCopy(
     }>;
   },
 ): Promise<{ githubDescription: string; discordTitle: string; discordAnnouncement: string }> {
-  const session = await getFreshAiSession(env);
-  const transport = createOpenAIOAuthTransport({
-    auth: session,
-    fetch: workerFetch,
-    responsesState: false,
-  });
   const commitPayload = release.commits.map((commit) => ({
     ...commit,
     message: commit.message.slice(0, 4_000),
   }));
-  const response = await transport.request("/responses", {
+  const response = await requestWithFreshAiSession(env, "/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: AbortSignal.timeout(180_000),
@@ -273,7 +267,28 @@ export async function generateStructuredReleaseCopy(
   return validateGeneratedCopy(parsed);
 }
 
-export async function getFreshAiSession(env: Env): Promise<OpenAIOAuthSession> {
+export async function requestWithFreshAiSession(
+  env: Env,
+  path: string,
+  init: RequestInit,
+): Promise<Response> {
+  const request = async (forceRefresh: boolean) => {
+    const transport = createOpenAIOAuthTransport({
+      auth: await getFreshAiSession(env, forceRefresh),
+      fetch: workerFetch,
+      responsesState: false,
+    });
+    return transport.request(path, init);
+  };
+  const response = await request(false);
+  if (response.status !== 401 && response.status !== 403) return response;
+  return request(true);
+}
+
+export async function getFreshAiSession(
+  env: Env,
+  forceRefresh = false,
+): Promise<OpenAIOAuthSession> {
   const encryptionKey = requireEncryptionKey(env);
   const row = await env.DB.prepare(
     `SELECT encrypted_session,iv,account_id_hash,expires_at,updated_at,
@@ -294,7 +309,7 @@ export async function getFreshAiSession(env: Env): Promise<OpenAIOAuthSession> {
     SESSION_PURPOSE,
   );
   const expiresSoon =
-    !current.expiresAt || Date.parse(current.expiresAt) <= Date.now() + 5 * 60_000;
+    forceRefresh || !current.expiresAt || Date.parse(current.expiresAt) <= Date.now() + 5 * 60_000;
   if (!expiresSoon) return current;
   if (!current.refreshToken) {
     throw new RoadmapError(

@@ -208,7 +208,7 @@ export function createApp() {
     ).first<{ value: string }>();
     return context.json(
       {
-        ok: schema?.value === "8",
+        ok: schema?.value === "9",
         schemaVersion: schema?.value ?? null,
         project: roadmapConfig.project.slug,
       },

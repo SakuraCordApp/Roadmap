@@ -5,9 +5,8 @@ import {
   type RoadmapConfig,
 } from "@roadmap/core";
 import { z } from "zod";
-import { createOpenAIOAuthTransport } from "@openai-oauth/core";
 import { aiResponseModelOptions } from "./ai-request.js";
-import { getFreshAiSession } from "./ai-oauth.js";
+import { requestWithFreshAiSession } from "./ai-oauth.js";
 import type { Env } from "./env.js";
 
 export interface DiscordReportAttachment {
@@ -47,12 +46,6 @@ export async function analyzeDiscordReport(
     attachments: DiscordReportAttachment[];
   },
 ): Promise<ReportAnalysis> {
-  const session = await getFreshAiSession(env);
-  const transport = createOpenAIOAuthTransport({
-    auth: session,
-    fetch: workerFetch,
-    responsesState: false,
-  });
   const attachments = input.attachments.slice(0, 10);
   const content: Array<Record<string, unknown>> = [
     {
@@ -112,7 +105,7 @@ export async function analyzeDiscordReport(
       content.push({ type: "input_file", file_url: url });
     }
   }
-  const response = await transport.request("/responses", {
+  const response = await requestWithFreshAiSession(env, "/responses", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     signal: AbortSignal.timeout(180_000),
@@ -278,5 +271,3 @@ function extractOutputText(response: Record<string, unknown>): string {
     throw new RoadmapError("AI_OUTPUT_EMPTY", "ChatGPT returned no report analysis.", 502);
   return parts.join("");
 }
-
-const workerFetch: typeof fetch = (input, init) => globalThis.fetch(input, init);
