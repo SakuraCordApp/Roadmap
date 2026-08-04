@@ -6,6 +6,7 @@ import { unstable_splitSqlQuery as splitSqlQuery } from "wrangler";
 import { RoadmapEngine } from "@roadmap/core";
 import roadmapConfig from "../../../roadmap.config.js";
 import {
+  AI_REPORT_RECOVERY_MIGRATION_STATEMENTS,
   ensureCurrentSchema,
   RECOVERY_MIGRATION_STATEMENTS,
   STREAMLINE_MIGRATION_STATEMENTS,
@@ -63,6 +64,10 @@ describe("D1 canonical storage", () => {
       path.resolve("migrations/0008_version_roadmap.sql"),
       "utf8",
     );
+    const aiReportRecoveryMigration = await readFile(
+      path.resolve("migrations/0009_recover_ai_report_jobs.sql"),
+      "utf8",
+    );
     const statements = splitSqlQuery(initialMigration);
     const triggers = statements.filter((statement) => statement.startsWith("CREATE TRIGGER"));
 
@@ -81,6 +86,9 @@ describe("D1 canonical storage", () => {
     );
     expect(splitSqlQuery(versionRoadmapMigration).map(normalizeSql)).toEqual(
       VERSION_ROADMAP_MIGRATION_STATEMENTS.map(normalizeSql),
+    );
+    expect(splitSqlQuery(aiReportRecoveryMigration).map(normalizeSql)).toEqual(
+      AI_REPORT_RECOVERY_MIGRATION_STATEMENTS.map(normalizeSql),
     );
   });
 
@@ -215,10 +223,58 @@ describe("D1 canonical storage", () => {
         "0006_streamline_roadmap_items.sql",
         "0007_recover_automation_jobs.sql",
         "0008_version_roadmap.sql",
+        "0009_recover_ai_report_jobs.sql",
       ]);
     } finally {
       await legacyMiniflare.dispose();
     }
+  });
+
+  it("requeues only exhausted report jobs rejected by ChatGPT", async () => {
+    await applyMigration(db, "0007_recover_automation_jobs.sql");
+    await applyMigration(db, "0008_version_roadmap.sql");
+    const now = "2026-08-03T04:02:09.005Z";
+    await db
+      .prepare(
+        `INSERT INTO discord_submissions(
+           thread_id,forum_id,guild_id,kind,title,created_at,updated_at
+         ) VALUES
+           ('chatgpt-403','bug-forum','guild','bug_report','Rejected report',?1,?1),
+           ('other-failure','bug-forum','guild','bug_report','Other failure',?1,?1)`,
+      )
+      .bind(now)
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO discord_report_jobs(thread_id,status,attempts,last_error)
+         VALUES
+           ('chatgpt-403','failed',10,'ChatGPT report analysis failed with HTTP 403.'),
+           ('other-failure','failed',10,'Discord POST failed with 403.')`,
+      )
+      .run();
+
+    await ensureCurrentSchema(db);
+
+    const jobs = await db
+      .prepare(
+        `SELECT thread_id,status,attempts,last_error
+         FROM discord_report_jobs ORDER BY thread_id`,
+      )
+      .all<{
+        thread_id: string;
+        status: string;
+        attempts: number;
+        last_error: string | null;
+      }>();
+    expect(jobs.results).toEqual([
+      { thread_id: "chatgpt-403", status: "pending", attempts: 0, last_error: null },
+      {
+        thread_id: "other-failure",
+        status: "failed",
+        attempts: 10,
+        last_error: "Discord POST failed with 403.",
+      },
+    ]);
   });
 
   it("coalesces publishes and requeues recoverable Discord automation once", async () => {

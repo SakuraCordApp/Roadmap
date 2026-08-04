@@ -59,6 +59,7 @@ describe("release automation", () => {
       "0006_streamline_roadmap_items.sql",
       "0007_recover_automation_jobs.sql",
       "0008_version_roadmap.sql",
+      "0009_recover_ai_report_jobs.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration

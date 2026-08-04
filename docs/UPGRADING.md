@@ -41,6 +41,10 @@ Migration `0008_version_roadmap.sql` advances schema metadata to version 8 and
 adds the separate version roadmap plus its immutable revision history. Existing
 Tracker items, Discord submissions, and forum synchronization remain unchanged.
 
+Migration `0009_recover_ai_report_jobs.sql` advances schema metadata to version
+9 and requeues exhausted, unlinked Discord reports stranded by a ChatGPT HTTP
+403 response.
+
 ## Schema policy
 
 - Never edit an already-applied migration.
