@@ -18,6 +18,13 @@ Worker:
 This does not create a workflow or roadmap-data commit in the application
 repository.
 
+Application repositories can instead own the complete release path in GitHub
+Actions. A release body containing `<!-- sakuracord-release-action:v1 -->` is an
+explicit ownership marker: the roadmap Worker accepts the signed delivery but
+does not enqueue, generate, patch, or announce that release. The Action is
+therefore operationally independent of this Worker, while unmarked releases
+retain the legacy self-hosted behavior described below.
+
 The roadmap Worker does not decide when to release, create a Git tag, build the
 application, or upload release artifacts. CI or a maintainer must publish the
 GitHub Release first; the webhook then generates and delivers its copy.

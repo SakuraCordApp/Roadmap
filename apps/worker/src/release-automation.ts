@@ -8,6 +8,7 @@ import { constantTimeEqual, redactError, sha256 } from "./security.js";
 import { D1RoadmapStorage } from "./storage.js";
 
 const GITHUB_API = "https://api.github.com";
+const RELEASE_ACTION_MARKER = "<!-- sakuracord-release-action:v1 -->";
 
 interface GithubReleasePayload {
   action: string;
@@ -19,6 +20,7 @@ interface GithubReleasePayload {
     target_commitish: string;
     published_at: string | null;
     draft: boolean;
+    body?: string | null;
   };
   repository: { full_name: string };
 }
@@ -90,6 +92,9 @@ export async function acceptGithubReleaseWebhook(
     !payload.release.published_at
   ) {
     return { accepted: false, reason: "release_not_published" };
+  }
+  if (payload.release.body?.includes(RELEASE_ACTION_MARKER)) {
+    return { accepted: false, reason: "github_actions_owned" };
   }
   if (
     payload.repository.full_name.toLowerCase() !== config.releases.githubRepository.toLowerCase()

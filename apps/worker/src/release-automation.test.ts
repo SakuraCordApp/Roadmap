@@ -220,6 +220,32 @@ describe("release automation", () => {
     });
   });
 
+  it("does not enqueue releases owned by the GitHub Actions workflow", async () => {
+    const body = JSON.stringify({
+      action: "published",
+      release: {
+        id: 10,
+        tag_name: "v1.2.0",
+        name: "SakuraCord 1.2",
+        body: "## Changes\n\n<!-- sakuracord-release-action:v1 -->",
+        html_url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v1.2.0",
+        target_commitish: "main",
+        published_at: "2026-07-24T12:00:00Z",
+        draft: false,
+      },
+      repository: { full_name: "SakuraCordApp/SakuraCord" },
+    });
+
+    await expect(
+      acceptGithubReleaseWebhook(await signedWebhook(body), env, roadmapConfig),
+    ).resolves.toEqual({ accepted: false, reason: "github_actions_owned" });
+    await expect(
+      env.DB.prepare("SELECT COUNT(*) AS count FROM release_jobs").first(),
+    ).resolves.toMatchObject({
+      count: 0,
+    });
+  });
+
   async function signedWebhook(body: string): Promise<Request> {
     const key = await crypto.subtle.importKey(
       "raw",
