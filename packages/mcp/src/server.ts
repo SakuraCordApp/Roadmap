@@ -400,7 +400,6 @@ export function createRoadmapMcpServer(options: RoadmapMcpOptions): RoadmapMcpSe
             z
               .object({
                 title: z.string().min(1).max(180),
-                description: z.string().max(2_000).optional(),
                 linkedTrackerItemIds: z.array(Id).max(50).default([]),
               })
               .strict(),

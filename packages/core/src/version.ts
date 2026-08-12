@@ -13,7 +13,6 @@ export const RoadmapVersionHighlightSchema = z
   .object({
     id: z.string().uuid(),
     title: NonEmpty.max(180),
-    description: z.string().trim().max(2_000).optional(),
     linkedTrackerItemIds: z.array(NonEmpty.max(64)).max(50).default([]),
   })
   .strict();

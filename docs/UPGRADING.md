@@ -45,6 +45,10 @@ Migration `0009_recover_ai_report_jobs.sql` advances schema metadata to version
 9 and requeues exhausted, unlinked Discord reports stranded by a ChatGPT HTTP
 403 response.
 
+Migration `0010_remove_version_highlight_descriptions.sql` advances schema
+metadata to version 10 and removes the retired optional description field from
+current version highlights and their revision history.
+
 ## Schema policy
 
 - Never edit an already-applied migration.

@@ -112,7 +112,6 @@ function VersionTimeline({ versions }: { versions: RoadmapVersion[] }) {
                 {version.highlights.map((highlight) => (
                   <li key={highlight.id}>
                     <span>{highlight.title}</span>
-                    {highlight.description ? <small>{highlight.description}</small> : null}
                   </li>
                 ))}
               </ul>

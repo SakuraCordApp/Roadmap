@@ -36,6 +36,7 @@ describe("public and maintainer API", () => {
       "0007_recover_automation_jobs.sql",
       "0008_version_roadmap.sql",
       "0009_recover_ai_report_jobs.sql",
+      "0010_remove_version_highlight_descriptions.sql",
     ]) {
       const migration = await readFile(path.resolve("migrations", name), "utf8");
       for (const statement of migration
@@ -64,7 +65,7 @@ describe("public and maintainer API", () => {
     const response = await app.request("http://localhost/healthz", {}, env, executionContext);
 
     expect(response.status).toBe(200);
-    await expect(response.json()).resolves.toMatchObject({ ok: true, schemaVersion: "9" });
+    await expect(response.json()).resolves.toMatchObject({ ok: true, schemaVersion: "10" });
   });
 
   it("creates, replays, lists, updates, conflicts, and exposes audit history", async () => {
@@ -172,6 +173,32 @@ describe("public and maintainer API", () => {
       headers: { Authorization: `Bearer ${env.ROADMAP_ADMIN_TOKEN}` },
     });
     expect((await history.json<any>()).data).toHaveLength(2);
+  });
+
+  it("rejects descriptions on version highlights", async () => {
+    const response = await call("/api/v1/versions", {
+      method: "POST",
+      headers: mutationHeaders("api-reject-version-highlight-description"),
+      body: JSON.stringify({
+        version: "0.1.7",
+        title: "Unsupported description",
+        summary: "Version highlights are title-only.",
+        state: "draft",
+        position: 17,
+        highlights: [
+          {
+            title: "Title-only highlight",
+            description: "This field must be rejected.",
+            linkedTrackerItemIds: [],
+          },
+        ],
+      }),
+    });
+
+    expect(response.status).toBe(422);
+    await expect(response.json()).resolves.toMatchObject({
+      error: { code: "VALIDATION_ERROR" },
+    });
   });
 
   it("requires bearer auth, idempotency keys, and an allowed mutation origin", async () => {

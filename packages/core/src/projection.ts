@@ -97,7 +97,7 @@ export interface VersionRoadmapProjection {
     title: string;
     summary: string;
     state: "planned" | "released";
-    highlights: Array<{ id: string; title: string; description?: string }>;
+    highlights: Array<{ id: string; title: string }>;
     releaseUrl?: string;
   }>;
   generatedAt: string;
@@ -119,11 +119,7 @@ export async function generateVersionRoadmapProjection(
     title: version.title,
     summary: version.summary,
     state: version.state,
-    highlights: version.highlights.map(({ id, title, description }) => ({
-      id,
-      title,
-      ...(description ? { description } : {}),
-    })),
+    highlights: version.highlights.map(({ id, title }) => ({ id, title })),
     ...(version.releaseUrl ? { releaseUrl: version.releaseUrl } : {}),
   }));
   const hashInput = JSON.stringify(projected);

@@ -8,6 +8,7 @@ import roadmapConfig from "../../../roadmap.config.js";
 import {
   AI_REPORT_RECOVERY_MIGRATION_STATEMENTS,
   ensureCurrentSchema,
+  REMOVE_HIGHLIGHT_DESCRIPTIONS_MIGRATION_STATEMENTS,
   RECOVERY_MIGRATION_STATEMENTS,
   STREAMLINE_MIGRATION_STATEMENTS,
   VERSION_ROADMAP_MIGRATION_STATEMENTS,
@@ -68,6 +69,10 @@ describe("D1 canonical storage", () => {
       path.resolve("migrations/0009_recover_ai_report_jobs.sql"),
       "utf8",
     );
+    const removeHighlightDescriptionsMigration = await readFile(
+      path.resolve("migrations/0010_remove_version_highlight_descriptions.sql"),
+      "utf8",
+    );
     const statements = splitSqlQuery(initialMigration);
     const triggers = statements.filter((statement) => statement.startsWith("CREATE TRIGGER"));
 
@@ -90,6 +95,107 @@ describe("D1 canonical storage", () => {
     expect(splitSqlQuery(aiReportRecoveryMigration).map(normalizeSql)).toEqual(
       AI_REPORT_RECOVERY_MIGRATION_STATEMENTS.map(normalizeSql),
     );
+    expect(splitSqlQuery(removeHighlightDescriptionsMigration).map(normalizeSql)).toEqual(
+      REMOVE_HIGHLIGHT_DESCRIPTIONS_MIGRATION_STATEMENTS.map(normalizeSql),
+    );
+  });
+
+  it("removes legacy descriptions from version highlights and their history", async () => {
+    await applyMigration(db, "0007_recover_automation_jobs.sql");
+    await applyMigration(db, "0008_version_roadmap.sql");
+    await applyMigration(db, "0009_recover_ai_report_jobs.sql");
+    const document = JSON.stringify({
+      id: "SCRV-01KZVPA3H03KCF814AS09VFGRP",
+      version: "0.1.5",
+      title: "Personalize everything",
+      summary: "A redesigned control center.",
+      state: "planned",
+      position: 15,
+      highlights: [
+        {
+          id: "d4d56eb9-f240-4bfc-9884-bcc7ff1f7277",
+          title: "Completely redesigned Settings",
+          description: "A retired highlight description.",
+          linkedTrackerItemIds: [],
+        },
+      ],
+      createdAt: "2026-08-12T19:13:42.944Z",
+      updatedAt: "2026-08-12T19:18:32.762Z",
+      revision: 3,
+    });
+    const actor = JSON.stringify({ id: "test", displayName: "Test", kind: "system" });
+    await db
+      .prepare(
+        `INSERT INTO roadmap_versions (
+          id,version,title,state,position,revision,created_at,updated_at,released_at,
+          document,actor_json,mutation_id,mutation_action,override_reason
+        ) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      )
+      .bind(
+        "SCRV-01KZVPA3H03KCF814AS09VFGRP",
+        "0.1.5",
+        "Personalize everything",
+        "planned",
+        15,
+        3,
+        "2026-08-12T19:13:42.944Z",
+        "2026-08-12T19:18:32.762Z",
+        null,
+        document,
+        actor,
+        "legacy-version-update",
+        "update",
+        null,
+      )
+      .run();
+    await db
+      .prepare(
+        `INSERT INTO roadmap_version_history (
+          version_id,revision,mutation_id,action,actor_json,before_json,after_json,override_reason
+        ) VALUES (?,?,?,?,?,?,?,?)`,
+      )
+      .bind(
+        "SCRV-01KZVPA3H03KCF814AS09VFGRP",
+        3,
+        "legacy-version-update",
+        "update",
+        actor,
+        document,
+        document,
+        null,
+      )
+      .run();
+
+    await Promise.all([ensureCurrentSchema(db), ensureCurrentSchema(db)]);
+
+    const row = await db
+      .prepare("SELECT document FROM roadmap_versions")
+      .first<{ document: string }>();
+    const history = await db
+      .prepare("SELECT before_json,after_json FROM roadmap_version_history")
+      .first<{ before_json: string; after_json: string }>();
+    for (const stored of [row?.document, history?.before_json, history?.after_json]) {
+      expect(stored).toBeTruthy();
+      const parsed = JSON.parse(stored!);
+      expect(parsed.highlights).toEqual([
+        {
+          id: "d4d56eb9-f240-4bfc-9884-bcc7ff1f7277",
+          title: "Completely redesigned Settings",
+          linkedTrackerItemIds: [],
+        },
+      ]);
+    }
+    await expect(
+      db
+        .prepare("SELECT value FROM schema_metadata WHERE key='schema_version'")
+        .first<{ value: string }>(),
+    ).resolves.toEqual({ value: "10" });
+    await expect(
+      db
+        .prepare("SELECT name FROM d1_migrations WHERE name = ?")
+        .bind("0010_remove_version_highlight_descriptions.sql")
+        .first<{ name: string }>(),
+    ).resolves.toEqual({ name: "0010_remove_version_highlight_descriptions.sql" });
   });
 
   it("removes legacy planning data from canonical rows and audit history", async () => {
@@ -224,6 +330,7 @@ describe("D1 canonical storage", () => {
         "0007_recover_automation_jobs.sql",
         "0008_version_roadmap.sql",
         "0009_recover_ai_report_jobs.sql",
+        "0010_remove_version_highlight_descriptions.sql",
       ]);
     } finally {
       await legacyMiniflare.dispose();

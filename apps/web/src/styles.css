@@ -316,17 +316,6 @@ img {
   position: relative;
 }
 
-.version-entry__rail::after {
-  position: absolute;
-  z-index: 1;
-  top: calc(var(--version-heading-size) / 2);
-  left: 50%;
-  width: calc(50% + var(--version-column-gap) - 12px);
-  height: 1px;
-  background: var(--border-strong);
-  content: "";
-}
-
 .version-entry__rail > span {
   position: absolute;
   z-index: 3;
@@ -419,14 +408,6 @@ img {
   font-weight: 650;
   line-height: 1.35;
   overflow-wrap: anywhere;
-}
-
-.version-entry__content li small {
-  display: block;
-  margin-top: 6px;
-  color: var(--muted);
-  font-size: 0.9rem;
-  line-height: 1.45;
 }
 
 .version-empty,

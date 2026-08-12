@@ -10,10 +10,30 @@ import type {
   VersionMutationResult,
 } from "./version-storage.js";
 import type { RoadmapVersion, RoadmapVersionHistoryEntry } from "./version.js";
+import { CreateRoadmapVersionSchema } from "./version.js";
 
 const actor = { id: "test", displayName: "Test", kind: "maintainer" as const };
 
 describe("RoadmapVersionEngine", () => {
+  it("rejects descriptions on version highlights", () => {
+    expect(() =>
+      CreateRoadmapVersionSchema.parse({
+        version: "0.1.0",
+        title: "A faster foundation",
+        summary: "A focused release plan.",
+        state: "draft",
+        position: 10,
+        highlights: [
+          {
+            title: "Rewrite the timeline",
+            description: "This field is intentionally unsupported.",
+            linkedTrackerItemIds: [],
+          },
+        ],
+      }),
+    ).toThrow();
+  });
+
   it("requires a curated highlight before a version becomes public", async () => {
     const engine = new RoadmapVersionEngine(new MemoryVersionStorage(), roadmapConfig);
     await expect(

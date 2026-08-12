@@ -41,7 +41,7 @@ import {
   FORUM_CONFIGURATION_BODY_LIMIT,
   readJsonBodyLimited,
 } from "./request-body.js";
-import { ensureCurrentSchema } from "./schema-migrations.js";
+import { CURRENT_SCHEMA_VERSION, ensureCurrentSchema } from "./schema-migrations.js";
 import { D1RoadmapStorage } from "./storage.js";
 
 type Variables = {
@@ -208,7 +208,7 @@ export function createApp() {
     ).first<{ value: string }>();
     return context.json(
       {
-        ok: schema?.value === "9",
+        ok: schema?.value === CURRENT_SCHEMA_VERSION,
         schemaVersion: schema?.value ?? null,
         project: roadmapConfig.project.slug,
       },

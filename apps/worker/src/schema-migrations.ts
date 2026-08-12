@@ -1,8 +1,10 @@
-const CURRENT_SCHEMA_VERSION = "9";
+export const CURRENT_SCHEMA_VERSION = "10";
 const STREAMLINE_MIGRATION_NAME = "0006_streamline_roadmap_items.sql";
 const RECOVERY_MIGRATION_NAME = "0007_recover_automation_jobs.sql";
 const VERSION_ROADMAP_MIGRATION_NAME = "0008_version_roadmap.sql";
 const AI_REPORT_RECOVERY_MIGRATION_NAME = "0009_recover_ai_report_jobs.sql";
+const REMOVE_HIGHLIGHT_DESCRIPTIONS_MIGRATION_NAME =
+  "0010_remove_version_highlight_descriptions.sql";
 
 export const STREAMLINE_MIGRATION_STATEMENTS = [
   "DROP INDEX IF EXISTS idx_roadmap_items_difficulty",
@@ -175,6 +177,59 @@ WHERE linked_item_id IS NULL
   "INSERT OR REPLACE INTO schema_metadata(key, value) VALUES ('schema_version', '9')",
 ] as const;
 
+export const REMOVE_HIGHLIGHT_DESCRIPTIONS_MIGRATION_STATEMENTS = [
+  `UPDATE roadmap_versions
+SET document = json_remove(
+  document,
+  '$.highlights[0].description',
+  '$.highlights[1].description',
+  '$.highlights[2].description',
+  '$.highlights[3].description',
+  '$.highlights[4].description',
+  '$.highlights[5].description',
+  '$.highlights[6].description',
+  '$.highlights[7].description',
+  '$.highlights[8].description',
+  '$.highlights[9].description',
+  '$.highlights[10].description',
+  '$.highlights[11].description'
+)`,
+  `UPDATE roadmap_version_history
+SET before_json = json_remove(
+  before_json,
+  '$.highlights[0].description',
+  '$.highlights[1].description',
+  '$.highlights[2].description',
+  '$.highlights[3].description',
+  '$.highlights[4].description',
+  '$.highlights[5].description',
+  '$.highlights[6].description',
+  '$.highlights[7].description',
+  '$.highlights[8].description',
+  '$.highlights[9].description',
+  '$.highlights[10].description',
+  '$.highlights[11].description'
+)
+WHERE before_json IS NOT NULL`,
+  `UPDATE roadmap_version_history
+SET after_json = json_remove(
+  after_json,
+  '$.highlights[0].description',
+  '$.highlights[1].description',
+  '$.highlights[2].description',
+  '$.highlights[3].description',
+  '$.highlights[4].description',
+  '$.highlights[5].description',
+  '$.highlights[6].description',
+  '$.highlights[7].description',
+  '$.highlights[8].description',
+  '$.highlights[9].description',
+  '$.highlights[10].description',
+  '$.highlights[11].description'
+)`,
+  "INSERT OR REPLACE INTO schema_metadata(key, value) VALUES ('schema_version', '10')",
+] as const;
+
 const schemaChecks = new WeakMap<D1Database, Promise<void>>();
 
 export function ensureCurrentSchema(db: D1Database): Promise<void> {
@@ -192,9 +247,9 @@ export function ensureCurrentSchema(db: D1Database): Promise<void> {
 async function migrateToCurrentSchema(db: D1Database): Promise<void> {
   const current = await readSchemaVersion(db);
   if (current === CURRENT_SCHEMA_VERSION) return;
-  if (current !== "5" && current !== "6" && current !== "7" && current !== "8") {
+  if (current !== "5" && current !== "6" && current !== "7" && current !== "8" && current !== "9") {
     throw new Error(
-      `Unsupported roadmap schema version ${current ?? "missing"}; expected 5, 6, 7, 8, or ${CURRENT_SCHEMA_VERSION}.`,
+      `Unsupported roadmap schema version ${current ?? "missing"}; expected 5, 6, 7, 8, 9, or ${CURRENT_SCHEMA_VERSION}.`,
     );
   }
 
@@ -223,7 +278,7 @@ async function migrateToCurrentSchema(db: D1Database): Promise<void> {
         .bind(RECOVERY_MIGRATION_NAME),
     );
   }
-  if (current !== "8") {
+  if (current !== "8" && current !== "9") {
     statements.push(
       ...VERSION_ROADMAP_MIGRATION_STATEMENTS.map((statement) => db.prepare(statement)),
       db
@@ -235,15 +290,27 @@ async function migrateToCurrentSchema(db: D1Database): Promise<void> {
         .bind(VERSION_ROADMAP_MIGRATION_NAME),
     );
   }
+  if (current !== "9") {
+    statements.push(
+      ...AI_REPORT_RECOVERY_MIGRATION_STATEMENTS.map((statement) => db.prepare(statement)),
+      db
+        .prepare(
+          `INSERT INTO d1_migrations(name)
+           SELECT ?1
+           WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = ?1)`,
+        )
+        .bind(AI_REPORT_RECOVERY_MIGRATION_NAME),
+    );
+  }
   statements.push(
-    ...AI_REPORT_RECOVERY_MIGRATION_STATEMENTS.map((statement) => db.prepare(statement)),
+    ...REMOVE_HIGHLIGHT_DESCRIPTIONS_MIGRATION_STATEMENTS.map((statement) => db.prepare(statement)),
     db
       .prepare(
         `INSERT INTO d1_migrations(name)
          SELECT ?1
          WHERE NOT EXISTS (SELECT 1 FROM d1_migrations WHERE name = ?1)`,
       )
-      .bind(AI_REPORT_RECOVERY_MIGRATION_NAME),
+      .bind(REMOVE_HIGHLIGHT_DESCRIPTIONS_MIGRATION_NAME),
   );
 
   try {
