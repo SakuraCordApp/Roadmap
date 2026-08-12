@@ -60,6 +60,18 @@ A normal transition to `done` requires:
 - at least one acceptance criterion;
 - every acceptance criterion satisfied.
 
+Treat implementation, tests, CI, repository inspection, and agent-run manual
+checks as evidence for maintainer review, not authorization to mark acceptance
+criteria satisfied. Keep the item in `in_progress` or `polishing` with its
+criteria unsatisfied until an authorized maintainer explicitly confirms that
+they have reviewed or tested the result and approves completion. A request to
+implement, fix, or "complete" work does not by itself authorize finalizing the
+roadmap item.
+
+Only after that explicit confirmation may you mark the confirmed criteria
+satisfied and transition the item to `done`. Never use an override to bypass
+the maintainer-confirmation requirement.
+
 Use an override only when the user explicitly authorizes it. The override reason
 must explain why the normal gate is being bypassed and will be stored in history.
 
