@@ -33,18 +33,10 @@ resumption journal under ignored `.roadmap/`, and verifies each external step.
 
 ## Release automation
 
-GitHub `release.published` webhooks are HMAC-verified and inserted into D1 with
-a unique repository/release key. The request returns immediately. The Worker
-attempts processing in `waitUntil`, while the minute cron is the durable retry
-path.
-
-The processor resolves the previous published tag, paginates the GitHub compare
-API so every commit is included, and sends bounded commit metadata to the
-ChatGPT OAuth transport. Structured output is validated before it can leave the
-Worker. Destination checkpoints are persisted independently: a retry does not
-regenerate text or repeat a successful GitHub patch. Discord uses a stable
-nonce with `enforce_nonce` so an ambiguous network retry cannot duplicate the
-announcement.
+The application repository's GitHub Actions workflow exclusively owns release
+notes and Discord release announcements. The Roadmap Worker verifies and
+acknowledges legacy GitHub release webhook traffic without enqueueing it. Its
+scheduled release step only terminally retires unfinished legacy jobs.
 
 ## Canonical mutation
 

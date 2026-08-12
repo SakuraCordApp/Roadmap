@@ -148,8 +148,8 @@ Expressions permission and a maintainer API token.
 
 The Subscribe button does not maintain a second subscriber database. It
 directly adds or removes `discord.updatesRoleId` on the member and responds
-ephemerally. That same role is the only allowed mention in generated release
-announcements.
+ephemerally. The application repository's release workflow uses that role for
+prepared release announcements.
 
 The projection is sorted and SHA-256 hashed. If visible data did not change, the
 bot does not call Discord. It edits the stored message ID and only creates a new

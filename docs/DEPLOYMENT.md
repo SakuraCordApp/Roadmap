@@ -110,13 +110,12 @@ For a fully non-interactive Discord run, set `DISCORD_BOT_TOKEN` and pass:
 --discord-maintainer-role-ids
 ```
 
-AI release automation also requires `GITHUB_RELEASE_TOKEN` with repository
-`Contents: write` and `Webhooks: write`, plus `--github-repository owner/name`.
-The first ChatGPT connection is deliberately interactive. A later
-non-interactive setup can verify and reuse the encrypted connected session.
-Pass `--skip-releases` when release automation is intentionally out of scope.
-Pass `--skip-ai` only when automatic Discord report analysis is also
-intentionally disabled.
+The Roadmap Worker no longer uses `GITHUB_RELEASE_TOKEN` or generates release
+copy. Legacy release setup flags remain temporarily for upgrade compatibility.
+The first ChatGPT connection for automatic Discord report analysis is
+deliberately interactive. A later non-interactive setup can verify and reuse
+the encrypted connected session. Pass `--skip-ai` when automatic Discord report
+analysis is intentionally disabled.
 
 When the Wrangler login can access multiple Cloudflare accounts, the
 interactive wizard asks which account should own the Worker and D1 database
@@ -150,7 +149,6 @@ npx wrangler secret put ROADMAP_ADMIN_TOKEN
 npx wrangler secret put DISCORD_BOT_TOKEN
 npx wrangler secret put DISCORD_APPLICATION_ID
 npx wrangler secret put DISCORD_PUBLIC_KEY
-npx wrangler secret put GITHUB_RELEASE_TOKEN
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
 npx wrangler secret put ROADMAP_OAUTH_ENCRYPTION_KEY
 npm run check

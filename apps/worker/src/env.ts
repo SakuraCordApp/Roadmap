@@ -4,7 +4,6 @@ interface SecretBindings {
   DISCORD_PUBLIC_KEY?: string;
   DISCORD_BOT_TOKEN?: string;
   ROADMAP_OAUTH_ENCRYPTION_KEY?: string;
-  GITHUB_RELEASE_TOKEN?: string;
   GITHUB_WEBHOOK_SECRET?: string;
 }
 

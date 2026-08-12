@@ -151,8 +151,7 @@ Each body includes `expectedRevision`.
 Versions move through `draft`, `planned`, `released`, and `cancelled`. Publishing
 a version as planned requires at least one highlight unless the maintainer
 records an explicit override reason. Updates and transitions require the exact
-current `expectedRevision`, just like Tracker items. A matching GitHub release
-automatically moves a planned version to released and attaches its release URL.
+current `expectedRevision`, just like Tracker items.
 
 ### Operational mutations
 
@@ -179,9 +178,10 @@ to authenticated `POST /api/v1/ai/oauth/complete`. The Worker then claims the
 expiring, single-use state and performs the PKCE exchange. Authorization codes,
 PKCE verifiers, and tokens are never written to project files.
 
-`POST /webhooks/github` is not a maintainer endpoint. It accepts only GitHub
-`release` deliveries whose raw body passes `X-Hub-Signature-256`, delivery ID
-has not been replayed, and repository matches typed configuration.
+`POST /webhooks/github` is not a maintainer endpoint. It verifies GitHub's
+`X-Hub-Signature-256` and acknowledges `release` deliveries without storing or
+processing them. Release notes and announcements belong exclusively to the
+application repository's GitHub Actions workflow.
 
 ## MCP endpoint
 

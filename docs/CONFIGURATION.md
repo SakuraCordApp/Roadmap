@@ -99,13 +99,12 @@ Forum tag mappings support separate IDs per forum:
 
 An unprefixed status key is a fallback for instances that share one mapping.
 
-`updatesRoleId` is the role toggled by Subscribe and pinged by release
-announcements. `roadmapChannelId` and `releaseAnnouncementChannelId` are
-independent typed settings. The setup CLI asks for both explicitly and verifies
-send/delete access in both. The Worker retains a roadmap-channel fallback only
-for backwards compatibility with older instance files.
+`updatesRoleId` is the role toggled by Subscribe. The application repository's
+release workflow uses it when sending a prepared release announcement.
+`releaseAnnouncementChannelId` remains in typed configuration for setup and
+upgrade compatibility; the Roadmap Worker does not publish to it.
 
-## AI and releases
+## AI and legacy release configuration
 
 ```json
 {
@@ -119,14 +118,12 @@ for backwards compatibility with older instance files.
 }
 ```
 
-The model settings are shared by automatic Discord report analysis and optional
-release writing. They are configurable in guided setup even when release
-automation is disabled. The model must be available to the connected
-ChatGPT/Codex-plan account.
-`reasoningEffort` is sent to both Discord report analysis and release writing;
+The release settings remain for setup and upgrade compatibility but do not
+enable Worker-side release generation or publication. The model must be
+available to the connected ChatGPT/Codex-plan account for automatic Discord
+report analysis. `reasoningEffort` is sent to report analysis;
 supported values are `none`, `low`, `medium`, `high`, `xhigh`, and `max`.
-`maxCommits` is a safety limit, not a sampling limit: a larger release fails
-explicitly instead of silently omitting commits.
+`maxCommits` is retained but unused.
 
 ## Environment and secrets
 
@@ -142,7 +139,6 @@ Secrets:
 - `DISCORD_APPLICATION_ID`
 - `DISCORD_PUBLIC_KEY`
 - `DISCORD_BOT_TOKEN`
-- `GITHUB_RELEASE_TOKEN`
 - `GITHUB_WEBHOOK_SECRET`
 - `ROADMAP_OAUTH_ENCRYPTION_KEY`
 - `ROADMAP_TOKEN` for local CLI/MCP clients

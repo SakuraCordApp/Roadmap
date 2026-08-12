@@ -10,9 +10,9 @@ Production secrets use Wrangler secret storage. CLI diagnostics redact bearer,
 bot, and long hexadecimal values. Token prompts use hidden input. Tokens are
 passed to Wrangler on stdin.
 
-Release automation stores `GITHUB_RELEASE_TOKEN`, `GITHUB_WEBHOOK_SECRET`, and
-`ROADMAP_OAUTH_ENCRYPTION_KEY` as Worker secrets. ChatGPT access and refresh
-tokens are AES-256-GCM encrypted in D1 with purpose-bound additional
+The legacy GitHub webhook stores `GITHUB_WEBHOOK_SECRET`; the Worker does not
+use `GITHUB_RELEASE_TOKEN`. `ROADMAP_OAUTH_ENCRYPTION_KEY` protects ChatGPT
+access and refresh tokens with AES-256-GCM in D1 with purpose-bound additional
 authenticated data. The encryption key is never stored in D1. OAuth PKCE
 verifiers use the same protection, expire after ten minutes, and are
 single-use.
@@ -85,9 +85,9 @@ Before a production migration:
   `@openai-oauth/core` transport. Credentials have account-level sensitivity.
   Operators must review its license and risk, restrict Worker administration,
   and disconnect/rotate immediately after a suspected compromise.
-- Commit messages are untrusted prompt data. The release prompt explicitly
-  rejects embedded instructions, bounds every message, validates structured
-  output, and strips Discord mentions before publishing.
+- The Roadmap Worker does not send commit messages to an AI release prompt or
+  publish generated release copy. The application repository owns prepared
+  release notes and announcements.
 
 `npm audit --audit-level=moderate` is part of the release evidence. Do not
 silence dependency advisories without documenting reachability and mitigation.

@@ -2,7 +2,6 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { Miniflare } from "miniflare";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import roadmapConfig from "../../../roadmap.config.js";
 import type { Env } from "./env.js";
 import { bytesToBase64Url } from "./crypto-store.js";
 
@@ -74,7 +73,7 @@ import {
   aiOAuthStatus,
   beginAiOAuth,
   finishAiOAuth,
-  generateStructuredReleaseCopy,
+  requestWithFreshAiSession,
 } from "./ai-oauth.js";
 
 describe("encrypted ChatGPT OAuth", () => {
@@ -117,7 +116,7 @@ describe("encrypted ChatGPT OAuth", () => {
 
   afterEach(async () => miniflare.dispose());
 
-  it("stores the PKCE verifier and refreshable session encrypted, then validates generated output", async () => {
+  it("stores the PKCE verifier and refreshable session encrypted", async () => {
     const started = await beginAiOAuth(env);
     expect(started.authorizationUrl).toContain("auth.openai.com");
     expect(oauthHarness.oauthRequestOptions).toEqual([
@@ -136,40 +135,13 @@ describe("encrypted ChatGPT OAuth", () => {
     expect(stored?.encrypted_session).not.toContain("refresh-token-secret");
     await expect(aiOAuthStatus(env)).resolves.toMatchObject({ connected: true });
 
-    const generated = await generateStructuredReleaseCopy(env, roadmapConfig, {
-      tagName: "v1.2.0",
-      releaseName: "SakuraCord 1.2",
-      releaseUrl: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v1.2.0",
-      previousTag: "v1.1.0",
-      commits: [
-        {
-          sha: "a".repeat(40),
-          message: "Add update subscriptions",
-          author: "Maintainer",
-          committedAt: "2026-07-24T12:00:00Z",
-          url: `https://github.com/SakuraCordApp/SakuraCord/commit/${"a".repeat(40)}`,
-        },
-      ],
+    const response = await requestWithFreshAiSession(env, "/responses", {
+      method: "POST",
+      body: JSON.stringify({ task: "Analyze a Discord report." }),
     });
-    expect(generated.githubDescription).toContain("Added subscriptions");
-    expect(generated.discordTitle).toContain("@\u200beveryone");
-    expect(generated.discordAnnouncement).toContain("[mention removed]");
-    expect(generated.discordAnnouncement).toContain("@\u200bhere");
+    expect(response.status).toBe(200);
     expect(oauthHarness.requests).toHaveLength(1);
-    expect(oauthHarness.requests[0]).toMatchObject({
-      model: "gpt-5.6-sol",
-      reasoning: { effort: "medium" },
-    });
-    const releasePrompt = JSON.parse(
-      (
-        oauthHarness.requests[0] as {
-          input: Array<{ content: Array<{ text: string }> }>;
-        }
-      ).input[0]!.content[0]!.text,
-    ) as { requirements: { github: string } };
-    expect(releasePrompt.requirements.github).toContain(
-      "Do not include a Full Changelog section or link",
-    );
+    expect(oauthHarness.requests[0]).toEqual({ task: "Analyze a Discord report." });
 
     const replacementKey = new Uint8Array(32);
     replacementKey.fill(9);
@@ -177,7 +149,7 @@ describe("encrypted ChatGPT OAuth", () => {
     await expect(aiOAuthStatus(env)).resolves.toEqual({ connected: false });
   });
 
-  it("requeues unfinished report and release jobs after a successful reconnect", async () => {
+  it("requeues unfinished reports and retires unfinished release jobs after reconnect", async () => {
     const started = await beginAiOAuth(env);
     expect(started.authorizationUrl).toContain("auth.openai.com");
     await env.DB.prepare(
@@ -209,9 +181,14 @@ describe("encrypted ChatGPT OAuth", () => {
     ).resolves.toEqual({ status: "pending", attempts: 0, locked_at: null, last_error: null });
     await expect(
       env.DB.prepare(
-        "SELECT status,attempts,locked_at,last_error FROM release_jobs WHERE release_id=10",
+        "SELECT status,attempts,locked_at,completed_at,last_error FROM release_jobs WHERE release_id=10",
       ).first(),
-    ).resolves.toEqual({ status: "pending", attempts: 0, locked_at: null, last_error: null });
+    ).resolves.toMatchObject({
+      status: "complete",
+      attempts: 10,
+      locked_at: null,
+      last_error: "Release automation is disabled; GitHub Actions owns release publication.",
+    });
   });
 
   it("forces one token refresh and retries after an authorization rejection", async () => {
@@ -222,21 +199,11 @@ describe("encrypted ChatGPT OAuth", () => {
     oauthHarness.responseStatuses.push(403, 200);
 
     await expect(
-      generateStructuredReleaseCopy(env, roadmapConfig, {
-        tagName: "v1.2.0",
-        releaseName: "SakuraCord 1.2",
-        releaseUrl: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v1.2.0",
-        commits: [
-          {
-            sha: "a".repeat(40),
-            message: "Retry authorization",
-            author: "Maintainer",
-            committedAt: "2026-07-24T12:00:00Z",
-            url: `https://github.com/SakuraCordApp/SakuraCord/commit/${"a".repeat(40)}`,
-          },
-        ],
+      requestWithFreshAiSession(env, "/responses", {
+        method: "POST",
+        body: JSON.stringify({ task: "Retry report analysis." }),
       }),
-    ).resolves.toMatchObject({ discordTitle: "Release @\u200beveryone" });
+    ).resolves.toMatchObject({ status: 200 });
     expect(oauthHarness.refreshes).toBe(1);
     expect(oauthHarness.requests).toHaveLength(2);
   });

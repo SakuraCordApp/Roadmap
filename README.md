@@ -34,10 +34,9 @@ independent D1 database.
   read-only application-repository inspection.
 - A valid Codex plugin and roadmap-management skill.
 - A resumable, idempotent setup/doctor/deploy/upgrade CLI.
-- Signed GitHub Release automation that collects the complete release commit
-  range, writes AI-generated release notes, and posts one Discord announcement.
 - ChatGPT/Codex-plan OAuth through an encrypted Worker-side session; no Codex
-  CLI, self-hosted runner, or usage-billed OpenAI API key is required.
+  CLI, self-hosted runner, or usage-billed OpenAI API key is required for
+  automatic Discord report analysis.
 
 ## Architecture
 
@@ -55,9 +54,7 @@ flowchart LR
   SYNC --> RQ[("Discord report queue")]
   RQ --> SYNC
   SYNC --> DR["Discord REST API"]
-  GH["GitHub release webhook"] --> API
   API --> AI["ChatGPT OAuth transport"]
-  API --> GR["GitHub Release API"]
 ```
 
 The D1 documents are authoritative. Version rows drive the public roadmap and
@@ -133,7 +130,7 @@ The setup wizard can configure:
 - Discord guild, forums, roadmap channel, unified tags, generated emoji, and
   maintainer roles;
 - ChatGPT model, reasoning effort, encrypted OAuth, and automatic report
-  analysis independently of optional release generation;
+  analysis;
 - local or remote MCP; and
 - empty or file-imported initial data.
 
@@ -146,7 +143,7 @@ See [Configuration](docs/CONFIGURATION.md) for the full contract.
 - [Setup and deployment](docs/DEPLOYMENT.md)
 - [Public and maintainer API](docs/API.md)
 - [Discord integration](docs/DISCORD.md)
-- [AI release automation](docs/RELEASES.md)
+- [Release automation ownership](docs/RELEASES.md)
 - [Gateway decision and fallback](docs/GATEWAY.md)
 - [MCP and Codex](docs/MCP_CODEX.md)
 - [Security](docs/SECURITY.md)

@@ -76,7 +76,6 @@ Cloudflare/CLI:
 
 ```sh
 npx wrangler secret put ROADMAP_ADMIN_TOKEN
-npx wrangler secret put GITHUB_RELEASE_TOKEN
 npx wrangler secret put GITHUB_WEBHOOK_SECRET
 ```
 
@@ -84,9 +83,8 @@ Rotate the Discord bot token in the Developer Portal, then update both
 Cloudflare Workers before redeploying them.
 
 Do not rotate `ROADMAP_OAUTH_ENCRYPTION_KEY` independently. Disconnect the AI
-session, replace the key, then run `roadmap releases connect-ai` so no
-undecryptable credential remains. Re-running `roadmap releases configure`
-performs that replacement and reconnect flow.
+session, replace the key, then reconnect the account so no undecryptable
+credential remains.
 
 ## Drift recovery
 
