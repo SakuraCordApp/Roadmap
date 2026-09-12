@@ -47,17 +47,21 @@ export default {
         ).run();
         await env.DB.prepare(
           `DELETE FROM discord_interaction_jobs
-           WHERE status='complete' AND completed_at < datetime('now','-1 day')`,
+           WHERE status='complete' AND unixepoch(completed_at) < unixepoch('now') - 86400`,
         ).run();
         await env.DB.prepare(
           `UPDATE discord_interaction_jobs
            SET status='failed',attempts=10,payload_json='{}',locked_at=NULL,
-               last_error='Interaction token expired before processing completed.'
-           WHERE status!='complete' AND created_at < datetime('now','-20 minutes')`,
-        ).run();
+               last_error=?1
+           WHERE status!='complete' AND unixepoch(created_at) < unixepoch('now') - 1200
+             AND (status IS NOT 'failed' OR attempts IS NOT 10 OR payload_json IS NOT '{}'
+                  OR locked_at IS NOT NULL OR last_error IS NOT ?1)`,
+        )
+          .bind("Interaction token expired before processing completed.")
+          .run();
         await env.DB.prepare(
           `DELETE FROM discord_interaction_jobs
-           WHERE status='failed' AND created_at < datetime('now','-1 day')`,
+           WHERE status='failed' AND unixepoch(created_at) < unixepoch('now') - 86400`,
         ).run();
       })(),
     );

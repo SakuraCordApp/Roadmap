@@ -554,7 +554,11 @@ export class DiscordSyncService {
         archived=excluded.archived,
         locked=excluded.locked,
         applied_tags_json=excluded.applied_tags_json,
-        updated_at=excluded.updated_at`,
+        updated_at=excluded.updated_at
+      WHERE discord_submissions.title IS NOT excluded.title
+         OR discord_submissions.archived IS NOT excluded.archived
+         OR discord_submissions.locked IS NOT excluded.locked
+         OR discord_submissions.applied_tags_json IS NOT excluded.applied_tags_json`,
     )
       .bind(
         thread.id,
@@ -619,7 +623,11 @@ export class DiscordSyncService {
         content=excluded.content,
         attachments_json=excluded.attachments_json,
         updated_at=excluded.updated_at,
-        deleted_at=NULL`,
+        deleted_at=NULL
+      WHERE discord_messages.content IS NOT excluded.content
+         OR discord_messages.attachments_json IS NOT excluded.attachments_json
+         OR discord_messages.updated_at IS NOT excluded.updated_at
+         OR discord_messages.deleted_at IS NOT NULL`,
     )
       .bind(
         message.id,
@@ -636,8 +644,11 @@ export class DiscordSyncService {
     if (isStarter) {
       await this.env.DB.prepare(
         `UPDATE discord_submissions
-         SET content=?, attachments_json=?, structured_metadata_json=?, updated_at=?
-         WHERE thread_id=?`,
+         SET content=?1, attachments_json=?2, structured_metadata_json=?3, updated_at=?4
+         WHERE thread_id=?5 AND (
+           content IS NOT ?1 OR attachments_json IS NOT ?2
+           OR structured_metadata_json IS NOT ?3 OR updated_at IS NOT ?4
+         )`,
       )
         .bind(
           content,
