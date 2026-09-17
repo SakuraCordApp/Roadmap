@@ -14,8 +14,13 @@ React, Codex, or CLI dependency.
 `apps/worker` owns the D1 storage adapter, HTTP API, authentication, rate
 limiting, Discord interactions, REST synchronization, and scheduled jobs.
 
-`apps/web` is a public React client. It reads the same API that external clients
-use and contains no mutation credentials.
+`apps/web` is the standalone public React client for self-hosted instances.
+SakuraCord's production UI lives in the Website repository at
+`sakuracord.app/roadmap` and `/tracker`. That website server-renders public data
+through a read-only service binding to this Worker. `ROADMAP_WEBSITE_URL` enables
+redirects from the legacy public pages while API, MCP, and Discord endpoints
+remain here. Instances without this setting continue serving `apps/web`.
+Neither frontend contains mutation credentials.
 
 The Roadmap Worker owns scheduled forum reconciliation and Discord's HTTP
 interactions endpoint, so report intake has one self-contained runtime and no

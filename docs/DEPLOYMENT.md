@@ -195,3 +195,13 @@ Repository build and local validation require no credentials. Deployment,
 secret writes, Discord registration, and write tests happen only when a
 developer explicitly runs the corresponding command. Production resource
 creation may also run idempotently inside the GitHub-triggered Workers Build.
+
+## Unified SakuraCord website
+
+Deploy the Website repository first, including its `ROADMAP` service binding to
+`sakuracord-roadmap`. Verify `/roadmap`, `/tracker`, and a direct
+`/tracker/items/:id` link before deploying this repository's redirects.
+`ROADMAP_WEBSITE_URL` points to the website origin; unset it for a standalone
+instance using `apps/web`. Legacy page redirects retain query parameters and
+item IDs. API, MCP, Discord interactions, and scheduled jobs keep their existing
+endpoints. The deployment workflow is still the only production deployment path.

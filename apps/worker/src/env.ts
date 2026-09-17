@@ -8,6 +8,7 @@ interface SecretBindings {
 }
 
 type RuntimeOverrides = {
+  ROADMAP_WEBSITE_URL?: string;
   ROADMAP_PUBLIC_URL?: string;
   ROADMAP_ALLOWED_ORIGINS?: string;
   ROADMAP_GATEWAY_PROVIDER?: "cloudflare" | "disabled";
@@ -17,6 +18,7 @@ type RuntimeOverrides = {
 
 export type Env = Omit<
   Cloudflare.Env,
+  | "ROADMAP_WEBSITE_URL"
   | "ROADMAP_PUBLIC_URL"
   | "ROADMAP_ALLOWED_ORIGINS"
   | "ROADMAP_GATEWAY_PROVIDER"

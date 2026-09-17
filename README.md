@@ -17,9 +17,11 @@ independent D1 database.
   acceptance criteria, source references, and stable IDs.
 - Optimistic concurrency, idempotency keys, database-triggered audit history,
   and synchronization jobs. Roadmap mutations never create Git commits.
-- A focused version-by-version React roadmap at `roadmap.sakuracord.app` and a
-  complete status tracker at `tracker.sakuracord.app`, backed by one Worker and
-  documented JSON API.
+- A focused version-by-version React roadmap and a
+  complete status tracker, backed by one Worker and documented JSON API.
+  SakuraCord's public UI is maintained in the Website repository at
+  `sakuracord.app/roadmap` and `sakuracord.app/tracker`; the old subdomains redirect
+  there when `ROADMAP_WEBSITE_URL` is configured.
 - Authenticated maintainer mutation endpoints with explicit lifecycle gates.
 - A version-based Discord projection that edits one existing message and skips
   unchanged visible hashes.

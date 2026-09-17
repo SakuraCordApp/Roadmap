@@ -61,6 +61,28 @@ describe("public and maintainer API", () => {
     await miniflare.dispose();
   });
 
+  it("redirects legacy public pages while preserving item paths and filters", async () => {
+    env.ROADMAP_WEBSITE_URL = "https://sakuracord.app";
+    for (const [source, destination] of [
+      ["https://roadmap.sakuracord.app/", "/roadmap"],
+      ["https://tracker.sakuracord.app/?priority=high", "/tracker?priority=high"],
+      [
+        "https://roadmap.sakuracord.app/items/SCR-example?search=voice",
+        "/tracker/items/SCR-example?search=voice",
+      ],
+      ["https://tracker.sakuracord.app/items/SCR-example", "/tracker/items/SCR-example"],
+      ["https://roadmap.sakuracord.app/tracker/items/SCR-example", "/tracker/items/SCR-example"],
+      ["https://roadmap.sakuracord.app/tracker?kind=bug", "/tracker?kind=bug"],
+    ]) {
+      const response = await app.request(source!, {}, env, executionContext);
+      expect(response.status).toBe(308);
+      expect(response.headers.get("location")).toBe(`https://sakuracord.app${destination}`);
+    }
+    const api = await call("/api/v1/config");
+    expect(api.status).toBe(200);
+    expect(api.headers.get("location")).toBeNull();
+  });
+
   it("reports the current schema as healthy", async () => {
     const response = await app.request("http://localhost/healthz", {}, env, executionContext);
 

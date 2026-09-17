@@ -112,6 +112,32 @@ export function createApp() {
       },
     }),
   );
+  // Public UI moved to the product website. Keep API, MCP, Discord, and
+  // standalone fork deployments on this service. Redirect before touching D1.
+  app.use("*", async (context, next) => {
+    const website = context.env.ROADMAP_WEBSITE_URL;
+    const url = new URL(context.req.url);
+    if (website && ["GET", "HEAD"].includes(context.req.method)) {
+      let pathname: string | undefined;
+      if (url.pathname === "/" || url.pathname === "/index.html") {
+        pathname =
+          roadmapConfig.project.trackerUrl &&
+          url.hostname === new URL(roadmapConfig.project.trackerUrl).hostname
+            ? "/tracker"
+            : "/roadmap";
+      } else if (/^\/(?:tracker\/)?items\/[^/]+\/?$/.test(url.pathname)) {
+        pathname = url.pathname.startsWith("/tracker/") ? url.pathname : `/tracker${url.pathname}`;
+      } else if (url.pathname === "/tracker" || url.pathname === "/tracker/") {
+        pathname = "/tracker";
+      }
+      if (pathname) {
+        const destination = new URL(pathname, website);
+        destination.search = url.search;
+        return context.redirect(destination.href, 308);
+      }
+    }
+    await next();
+  });
   app.use("/api/*", async (context, next) => {
     const configured = context.env.ROADMAP_ALLOWED_ORIGINS?.split(",")
       .map((value) => value.trim())
