@@ -68,7 +68,7 @@ Releases ping again when a fix reaches the regular (non-beta) channel.
    `agent: investigate`; the agent finds the likely code and posts file/line
    findings, which are mirrored to Discord.
 3. _Fix_ (maintainer-triggered): `agent: fix` (or Discord **Manage → Run fix
-   agent**) runs Codex on the `xcode-27` runner and opens a **draft** PR against
+   agent**) runs Codex with GPT-6 Luna on the `xcode-27` runner and opens a **draft** PR against
    `nightly`. Nothing merges automatically.
 
 **Maintainers in Discord** use **Manage** on a report card to confirm, ask for
@@ -120,7 +120,7 @@ on `main`.
 
 Everything runs on free tiers: Workers, D1, Queues, Vectorize, and Workers AI
 on Cloudflare, plus GitHub Actions for the public repository. The only paid
-part is OpenAI API usage (Luna for triage and investigation, Sol for fixes).
+part is OpenAI API usage: GPT-6 Luna for triage, investigation, and fixes.
 
 ## Development
 
