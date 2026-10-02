@@ -419,7 +419,7 @@ export async function syncDiscordThread(env: Env, payload: { threadId: string })
     }
     last = message.id;
   }
-  const watchUntil = processed ? new Date(Date.now() + WATCH_MS).toISOString() : null;
+  const watchUntil = processed ? new Date(Date.now() + WATCH_MS).toISOString() : cursor.watchUntil;
   await setThreadCursor(env.DB, payload.threadId, last, watchUntil);
   if (reporterReplied && issue.status === "needs_info") await returnToTriage(env, issue.number);
   if (ordered.some((message) => snowflake(message.id) > snowflake(last))) {

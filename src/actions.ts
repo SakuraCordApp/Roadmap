@@ -1,3 +1,4 @@
+import { markFixed } from "./fixes";
 import { AGENT_LABELS, STATUS_BY_ID, type StatusId } from "./config";
 import { getIssue, patchIssue, setPendingNote } from "./db/store";
 import type { Env } from "./env";
@@ -9,6 +10,7 @@ import { neutralizeUserText } from "./report/body";
 import { NO_MIRROR } from "./sync/markers";
 
 export type MaintainerAction =
+  | "mark_fixed"
   | "confirm"
   | "needs_info"
   | "in_progress"
@@ -35,6 +37,12 @@ export function actionOptions(status: StatusId, kind: "bug" | "feature" | null):
   const feature = kind === "feature";
   const options: ActionOption[] = [];
   if (open) {
+    options.push({
+      value: "mark_fixed",
+      label: feature ? "Mark as implemented…" : "Mark as fixed…",
+      description: "Record an existing fix or a published release",
+      emoji: "🌸",
+    });
     if (status === "new" || status === "needs_info") {
       options.push({
         value: "confirm",
@@ -149,7 +157,7 @@ export async function performAction(
   number: number,
   action: MaintainerAction,
   actor: string,
-  input: { note?: string; milestone?: number | null } = {},
+  input: { note?: string; milestone?: number | null; release?: string; reference?: string } = {},
 ): Promise<string> {
   const github = new GitHub(env);
   const path = github.repo(`/issues/${number}`);
@@ -162,6 +170,9 @@ export async function performAction(
     });
   let message: string;
   switch (action) {
+    case "mark_fixed":
+      message = await markFixed(env, issue, actor, input);
+      break;
     case "confirm":
       await github.request("PATCH", path, { labels: exclusive(labels, "confirmed") });
       if (note) {

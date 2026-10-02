@@ -97,7 +97,25 @@ are idempotent. GitHub publishing credentials stay outside the read-only agent s
 
 **Maintainers in Discord** use **Manage** on a report card to confirm, ask for
 info, plan for a milestone, mark duplicate/declined/can't reproduce, reopen, or
-run the agents. Every action is applied on GitHub first; Discord follows.
+run the agents. **Mark as fixed…** (or **Mark as implemented…**) accepts a
+published release, or a commit/merged PR already on nightly. Unreleased fixes
+stay open while release jobs check their ancestry. Published-release confirmation
+closes the report as Shipped and records the maintainer's decision on GitHub;
+a nightly confirmation is also tracked into later regular releases. The modal
+offers the latest nightly/regular releases and accepts another published release
+by tag or link. Manage requires the configured maintainer role, Administrator,
+or Manage Server; every submitted action rechecks authorization.
+
+GitHub remains canonical; Discord follows. For automatic fix linking, include
+`Fixes #123` (also `Closes` or `Resolves`) in a PR title/body or a nightly commit
+message. An open PR moves waiting work to In Progress; a merged fix moves it to
+In Nightly; a release containing a recorded fix marks it Shipped.
+
+Follow-up discussion syncs between platforms without starting an agent for every
+message. A new reply from the identified original reporter while Needs Info
+returns the report to triage and starts a fresh assessment. Other comments,
+including replies on closed issues, do not reopen or start agents automatically.
+Maintainers can rerun assessment or reopen through Manage.
 
 ## Layout
 

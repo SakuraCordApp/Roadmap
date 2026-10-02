@@ -1,3 +1,4 @@
+import type { ReportRelease } from "../releases";
 import type { IssueKind } from "../config";
 import {
   REPORT_KINDS,
@@ -201,4 +202,56 @@ export function parseModal(data: any): ModalSubmission {
       size: attachment.size,
     }));
   return { values, multi, attachments };
+}
+
+export function fixedModal(number: number, kind: IssueKind | null, releases: ReportRelease[]) {
+  return {
+    type: 9,
+    data: {
+      custom_id: `ma:mark_fixed:${number}`,
+      title: truncate(`Mark ${kind === "feature" ? "implemented" : "fixed"} · #${number}`, 45),
+      components: [
+        {
+          type: 18,
+          label: "Where is the fix available?",
+          component: {
+            type: 3,
+            custom_id: "release",
+            required: true,
+            options: [
+              { label: "In code — not released yet", value: "unreleased" },
+              ...releases
+                .slice(0, 2)
+                .map((r) => ({ label: `${r.version} (${r.channel})`, value: r.tag })),
+              { label: "Another published release…", value: "other" },
+            ],
+          },
+        },
+        {
+          type: 18,
+          label: "Commit, PR, or other release",
+          description:
+            "Required for unreleased fixes or another release. Paste a link, SHA, PR number, or release tag.",
+          component: {
+            type: 4,
+            custom_id: "reference",
+            style: 1,
+            required: false,
+            max_length: 300,
+          },
+        },
+        {
+          type: 18,
+          label: "Note for the reporter",
+          component: {
+            type: 4,
+            custom_id: "note",
+            style: 2,
+            required: false,
+            max_length: 1500,
+          },
+        },
+      ],
+    },
+  };
 }

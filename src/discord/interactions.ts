@@ -22,10 +22,11 @@ import {
   type FiledReport,
   type SimilarReport,
 } from "../reports";
+import { cachedReportReleases } from "../releases";
 import { REPORT_KINDS } from "../report/schema";
 import { discordClient, refreshCard } from "./threads";
 import { COMPONENTS_V2, EPHEMERAL, issueUrl } from "./cards";
-import { detailsModal, parseModal, reportModal } from "./modals";
+import { detailsModal, fixedModal, parseModal, reportModal } from "./modals";
 import { noMentions } from "./rest";
 import { fromHex, randomId } from "../util/crypto";
 import { errorMessage, json } from "../util/http";
@@ -275,6 +276,8 @@ async function handleComponent(interaction: Interaction, env: Env, later: Later)
         (value) => value.value === chosen,
       );
       if (!option) return ephemeral("That action isn't available anymore.");
+      if (chosen === "mark_fixed")
+        return json(fixedModal(number, issue.kind, await cachedReportReleases(env)));
       if (chosen === "plan") {
         const milestones = await openMilestones(env);
         if (!milestones.length)
@@ -602,6 +605,8 @@ async function handleModal(interaction: Interaction, env: Env, later: Later) {
     later(async () => {
       const message = await performAction(env, number, action, user.name, {
         note: submission.values.note,
+        release: submission.values.release,
+        reference: submission.values.reference,
       });
       await discord.editInteractionResponse(interaction.token, {
         content: `✅ ${message}`,

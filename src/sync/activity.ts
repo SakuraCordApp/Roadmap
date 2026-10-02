@@ -173,7 +173,7 @@ export async function handleRelease(
   const candidates = (await listIssues(env.DB)).filter(
     (issue) =>
       issue.kind &&
-      issue.fixes.some((fix) => fix.state === "merged" && fix.sha) &&
+      (issue.fixes.some((fix) => fix.state === "merged" && fix.sha) || issue.shippedIn) &&
       (!issue.shippedIn || (!prerelease && !issue.shippedStableIn)) &&
       !["duplicate", "declined", "cant_reproduce"].includes(issue.status),
   );
@@ -196,17 +196,27 @@ export async function shipIssue(
   const issue = await getIssue(env.DB, payload.number);
   if (!issue) return;
   const github = new GitHub(env);
-  const prerelease = isPrereleaseTag(payload.tag);
+  if (!(await containsAnyFix(env, github, issue, payload.tag))) return;
+  await recordShipment(env, issue, payload, isPrereleaseTag(payload.tag));
+}
+
+/** Shared release completion for verified ancestry and explicit maintainer confirmation. */
+export async function recordShipment(
+  env: Env,
+  issue: IssueRecord,
+  payload: { tag: string; url: string },
+  prerelease: boolean,
+  confirmation?: string,
+): Promise<void> {
+  const github = new GitHub(env);
   const version = releaseDisplayName(payload.tag);
-  if (!(await containsAnyFix(github, issue, payload.tag))) return;
-  if (!issue.shippedIn) {
-    await patchIssue(env.DB, issue.number, {
-      shippedIn: version,
-      ...(prerelease ? {} : { shippedStableIn: version }),
-    });
-    const current = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
+  const current =
+    !issue.shippedIn || issue.state === "open"
+      ? await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`))
+      : null;
+  if (!issue.shippedIn || current?.state === "open") {
     let milestone: number | undefined;
-    if (!current.milestone) {
+    if (!current!.milestone) {
       const title = releaseMilestoneTitle(payload.tag);
       milestone = (
         await env.DB.prepare("SELECT number FROM milestones WHERE title=?")
@@ -214,16 +224,21 @@ export async function shipIssue(
           .first<{ number: number }>()
       )?.number;
     }
-    const labels = labelNames(current).filter((name) => !name.startsWith("status: "));
+    const labels = labelNames(current!).filter((name) => !name.startsWith("status: "));
     labels.push(statusGithubLabel("shipped")!);
+    await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
+      body: `${NO_MIRROR}\n🌸 Shipped in [SakuraCord ${version}](${payload.url}).${confirmation ? `\n\n${confirmation}` : ""}`,
+    });
+    await setState(env.DB, `ship:tag:${issue.number}`, payload.tag);
+    await patchIssue(env.DB, issue.number, {
+      shippedIn: version,
+      shippedStableIn: prerelease ? null : version,
+    });
     await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
       labels,
       state: "closed",
       state_reason: "completed",
       ...(milestone ? { milestone } : {}),
-    });
-    await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
-      body: `${NO_MIRROR}\n🌸 Shipped in [SakuraCord ${version}](${payload.url}).`,
     });
     await addEvent(env.DB, issue.number, "shipped", { version, url: payload.url, prerelease });
   } else if (!prerelease && !issue.shippedStableIn) {
@@ -238,7 +253,12 @@ export async function shipIssue(
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
 }
 
-async function containsAnyFix(github: GitHub, issue: IssueRecord, tag: string): Promise<boolean> {
+async function containsAnyFix(
+  env: Env,
+  github: GitHub,
+  issue: IssueRecord,
+  tag: string,
+): Promise<boolean> {
   for (const fix of issue.fixes) {
     if (fix.state !== "merged" || !fix.sha) continue;
     try {
@@ -250,6 +270,18 @@ async function containsAnyFix(github: GitHub, issue: IssueRecord, tag: string): 
     } catch (error) {
       console.error(`Could not compare ${fix.sha} with ${tag}`, error);
     }
+  }
+  // A maintainer may confirm a published nightly without knowing the original
+  // fix SHA. Its release tag is sufficient evidence for later release ancestry.
+  if (issue.shippedIn) {
+    const shippedTag =
+      (await getState(env.DB, `ship:tag:${issue.number}`)) ??
+      `v${issue.shippedIn.replace(/^v/, "").replace(/ Beta /i, "-Beta-")}`;
+    const comparison = await github.request<{ status: string }>(
+      "GET",
+      github.repo(`/compare/${encodeURIComponent(shippedTag)}...${encodeURIComponent(tag)}`),
+    );
+    return comparison.status === "ahead" || comparison.status === "identical";
   }
   return false;
 }
