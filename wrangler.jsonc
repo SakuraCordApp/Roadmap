@@ -50,8 +50,6 @@
   "vars": {
     "WEBSITE_URL": "https://sakuracord.app",
     "HUB_URL": "https://roadmap.sakuracord.app",
-    "TRIAGE_MODEL": "gpt-6-luna",
-    "TRIAGE_REASONING_EFFORT": "medium",
   },
   "observability": { "enabled": true, "head_sampling_rate": 1 },
 }

@@ -17,8 +17,8 @@ flowchart LR
   H -->|forum posts, tags, cards, status pings, mirrored comments| D
   H --> DB[("D1: links, votes, cursors, cache")]
   H --> V[("Vectorize: duplicate search")]
-  H -->|Luna triage| O["OpenAI API"]
   G -->|agent: investigate / agent: fix labels| A["GitHub Actions<br/>Codex agents"]
+  A -->|GPT-6 Luna| O["OpenAI API"]
 ```
 
 ## How it works
@@ -61,15 +61,25 @@ Releases ping again when a fix reaches the regular (non-beta) channel.
 
 **AI pipeline.**
 
-1. _Triage_ (every new report, in the Worker, GPT-6 Luna): type, area,
-   priority, clean title, one-line summary, duplicate judgement against the 8
-   most similar reports, and questions when a bug can't be acted on.
-2. _Investigation_ (GitHub Actions, read-only Codex): bugs that pass triage get
-   `agent: investigate`; the agent finds the likely code and posts file/line
-   findings, which are mirrored to Discord.
-3. _Fix_ (maintainer-triggered): `agent: fix` (or Discord **Manage → Run fix
-   agent**) runs Codex with GPT-6 Luna on the `xcode-27` runner and opens a **draft** PR against
-   `nightly`. Nothing merges automatically.
+1. _Triage and investigation_ (one GitHub Actions job, read-only Codex with
+   GPT-6 Luna): every new bug or feature request gets `agent: investigate`.
+   The agent reads nightly's source, the report, up to 30 recent comments,
+   up to four downloaded screenshots, and eight similar report summaries.
+   It returns type, area, priority, title, summary, duplicate suggestions,
+   missing-information questions, and code findings in one assessment comment.
+   The hub validates the Actions-authored result, applies metadata on GitHub,
+   and mirrors the comment. Duplicate suggestions never auto-close a report.
+   No separate Luna call runs inside the Worker.
+2. _Fix_ (maintainer-triggered): `agent: fix` or **Manage → Run fix agent**
+   runs Codex with GPT-6 Luna on the `xcode-27` runner and opens a **draft** PR
+   against `nightly`. Nothing merges automatically.
+
+The assessment label stays until its result is applied. Failed runs can be
+retried in Actions or through **Manage → Run triage & investigation**. Reporter
+answers to information requests start a new combined assessment. If the report
+body changes during a run, its stale result schedules a fresh assessment.
+Agent comments are updated in place when rerun; replayed result deliveries
+are idempotent. GitHub publishing credentials stay outside the read-only agent step.
 
 **Maintainers in Discord** use **Manage** on a report card to confirm, ask for
 info, plan for a milestone, mark duplicate/declined/can't reproduce, reopen, or
@@ -111,7 +121,8 @@ Admin endpoints take `Authorization: Bearer $ROADMAP_ADMIN_TOKEN` (Keychain
 
 Secrets: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`,
 `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (PKCS#8), `GITHUB_APP_WEBHOOK_SECRET`,
-`OPENAI_API_KEY`, `ROADMAP_ADMIN_TOKEN`. The GitHub App's webhook URL is
+`ROADMAP_ADMIN_TOKEN`. The app repository holds the `OPENAI_API_KEY` Actions
+secret; the Worker does not need it. The GitHub App's webhook URL is
 `https://roadmap.sakuracord.app/webhooks/github-app`.
 
 Editing the report form: change `src/report/schema.ts`, then regenerate the
@@ -152,7 +163,7 @@ with the account's other Workers; they are not dedicated to this hub.
 - [Workers AI](https://developers.cloudflare.com/workers-ai/platform/pricing/):
   10,000 neurons/day. bge-m3 embeddings cost 1,075 neurons per million input
   tokens, so even 100,000 embedding tokens/day use about 108 neurons. Luna
-  triage and GitHub agents use the separately funded OpenAI API.
+  assessment and fix agents use the separately funded OpenAI API.
 - Workers also have per-invocation CPU and subrequest limits, and an account
   request allowance. A low report count alone does not bound public website
   traffic, discussion volume, or usage by other projects.

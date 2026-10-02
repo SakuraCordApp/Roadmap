@@ -48,7 +48,7 @@ admin.get("/status", async (c) => {
     configured: {
       githubApp: Boolean(c.env.GITHUB_APP_ID && c.env.GITHUB_APP_PRIVATE_KEY),
       githubWebhook: Boolean(c.env.GITHUB_APP_WEBHOOK_SECRET),
-      openai: Boolean(c.env.OPENAI_API_KEY),
+      assessment: "GitHub Actions",
       discord: Boolean(c.env.DISCORD_BOT_TOKEN),
     },
     issues: issues.length,
@@ -124,7 +124,7 @@ admin.post("/reindex", async (c) => {
 admin.post("/retriage/:number", async (c) => {
   const number = Number(c.req.param("number"));
   await patchIssue(c.env.DB, number, { triagedAt: null });
-  await enqueue(c.env, "triage", String(number), { number });
+  await enqueue(c.env, "triage", String(number), { number, force: true });
   return c.json({ queued: true });
 });
 

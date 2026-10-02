@@ -10,6 +10,7 @@ import { nowIso } from "../util/text";
 export type JobKind =
   | "sync-issue"
   | "triage"
+  | "triage-result"
   | "embed"
   | "comment"
   | "discord-thread"

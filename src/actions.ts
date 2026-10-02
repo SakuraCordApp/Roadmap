@@ -117,8 +117,8 @@ export function actionOptions(status: StatusId, kind: "bug" | "feature" | null):
     }
     options.push({
       value: "investigate",
-      label: "Run investigation agent",
-      description: "Find the likely cause in the code",
+      label: "Run triage & investigation",
+      description: "Assess the report and inspect the code",
       emoji: "🔎",
     });
     options.push({
@@ -254,10 +254,19 @@ export async function performAction(
       message = "Reopened.";
       break;
     case "investigate":
+      if (labels.includes(AGENT_LABELS.investigate.name)) {
+        await github.request(
+          "DELETE",
+          github.repo(
+            `/issues/${number}/labels/${encodeURIComponent(AGENT_LABELS.investigate.name)}`,
+          ),
+        );
+      }
       await github.request("POST", github.repo(`/issues/${number}/labels`), {
         labels: [AGENT_LABELS.investigate.name],
       });
-      message = "The investigation agent is starting. Its findings will be posted here.";
+      message =
+        "The triage and investigation agent is starting. Its assessment will be posted here.";
       break;
     case "fix":
       await github.request("POST", github.repo(`/issues/${number}/labels`), {

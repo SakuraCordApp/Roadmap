@@ -160,7 +160,7 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     record.state === "open" &&
     record.status === "new" &&
     !record.triagedAt &&
-    env.OPENAI_API_KEY
+    env.GITHUB_APP_ID
   ) {
     await enqueue(env, "triage", String(record.number), { number: record.number });
   }

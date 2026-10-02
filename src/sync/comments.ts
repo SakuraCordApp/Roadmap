@@ -1,3 +1,4 @@
+import { parseTriageResult } from "../ai/triage";
 import { DISCORD, STATUS_BY_ID } from "../config";
 import {
   deleteLink,
@@ -156,8 +157,15 @@ async function deleteMirrored(env: Env, link: CommentLink) {
 function agentSummary(body: string): string {
   const summary = body.match(/###\s*Summary\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
   const locations = body.match(/###\s*Likely locations?\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
+  const questions = body.match(/###\s*Questions\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
+  const duplicate = body.match(/###\s*Possible duplicate\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
   return (
-    [summary, locations ? `**Likely location**\n${locations}` : null]
+    [
+      summary,
+      questions ? `**Questions**\n${questions}` : null,
+      duplicate,
+      locations ? `**Likely location**\n${locations}` : null,
+    ]
       .filter(Boolean)
       .join("\n\n") || body
   );
@@ -171,7 +179,7 @@ function githubContent(body: string, url: string, agent: boolean): string {
       /\[(?:image|Image)[^\]]*\]\((https:\/\/github\.com\/user-attachments\/[^)\s]+)\)/g,
       "$1",
     );
-  return `${text}\n-# [${agent ? "Full investigation" : "View"} on GitHub](<${url}>)`;
+  return `${text}\n-# [${agent ? "Full assessment" : "View"} on GitHub](<${url}>)`;
 }
 
 export async function syncGithubComment(
@@ -194,6 +202,12 @@ export async function syncGithubComment(
   const issue = await getIssue(env.DB, payload.number);
   if (!issue) return;
   const login = comment.user?.login ?? "someone";
+  if (parseTriageResult(comment, issue.number)) {
+    await enqueue(env, "triage-result", String(comment.id), {
+      number: issue.number,
+      commentId: comment.id,
+    });
+  }
 
   if (
     payload.action === "created" &&
@@ -222,7 +236,7 @@ export async function syncGithubComment(
       contentHash: hash,
       createdAt: comment.created_at,
     }));
-  const author = agent ? "Investigation agent" : login;
+  const author = agent ? "Triage & investigation agent" : login;
   await upsertCommentEvent(
     env.DB,
     { id: linkId, issueNumber: issue.number },

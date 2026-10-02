@@ -247,7 +247,7 @@ export const AGENT_LABELS = {
   investigate: {
     name: "agent: investigate",
     color: "8B5CF6",
-    description: "Ask the investigation agent to locate the cause in the code",
+    description: "Run combined triage and code investigation",
   },
   fix: {
     name: "agent: fix",

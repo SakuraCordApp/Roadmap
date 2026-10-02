@@ -19,6 +19,7 @@ import {
 import { rpc } from "./rpc";
 import { versionOptions } from "./reports";
 import { pollDiscordThreads } from "./sync/comments";
+import { assessmentContext } from "./sync/triage";
 import { handlers } from "./jobs/handlers";
 import { errorMessage, HttpError } from "./util/http";
 
@@ -68,6 +69,14 @@ app.get("/api/v2/tracker", async (c) => {
 app.get("/api/v2/issues/:number", async (c) => {
   const detail = await issueDetail(c.env, Number(c.req.param("number")));
   return detail ? cachedJson(c.req.raw, detail) : c.json({ error: "Not found" }, 404);
+});
+app.get("/api/v2/issues/:number/assessment-context", async (c) => {
+  const limit = await c.env.REPORT_RATE_LIMITER.limit({
+    key: `assessment:${c.req.header("CF-Connecting-IP") ?? "internal"}`,
+  });
+  if (!limit.success) return c.json({ error: "Too many requests" }, 429);
+  const context = await assessmentContext(c.env, Number(c.req.param("number")));
+  return context ? c.json(context) : c.json({ error: "Not found" }, 404);
 });
 app.get("/api/v2/roadmap", async (c) => cachedJson(c.req.raw, await roadmapData(c.env)));
 app.get("/api/v2/legacy/:id", async (c) => {
