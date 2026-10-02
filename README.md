@@ -1,172 +1,134 @@
-# SakuraCord Roadmap
+# SakuraCord Hub
 
-A production-oriented, open-source roadmap platform for engineering teams that
-want one canonical database, a focused public roadmap, a deliberately simple
-Discord projection, forum synchronization, and conversational management
-through MCP and Codex.
+The issue hub for [SakuraCord](https://github.com/SakuraCordApp/SakuraCord).
+Bug reports and suggestions live as **GitHub Issues** in
+`SakuraCordApp/SakuraCord`, and this Cloudflare Worker keeps them in sync with
+the Discord forums and [sakuracord.app/tracker](https://sakuracord.app/tracker),
+triages them with AI, and hands them to coding agents.
 
-SakuraCord is the included configuration. New instances start with an empty
-roadmap; the engine has no hard-coded SakuraCord project, lifecycle, or Discord
-channel assumptions. A fork customizes one typed configuration layer and owns an
-independent D1 database.
-
-## What is included
-
-- Separate, revision-safe schemas for the public version roadmap and detailed
-  bug/feature tracker. Tracker records retain report-backed classification,
-  acceptance criteria, source references, and stable IDs.
-- Optimistic concurrency, idempotency keys, database-triggered audit history,
-  and synchronization jobs. Roadmap mutations never create Git commits.
-- A focused version-by-version React roadmap and a
-  complete status tracker, backed by one Worker and documented JSON API.
-  SakuraCord's public UI is maintained in the Website repository at
-  `sakuracord.app/roadmap` and `sakuracord.app/tracker`; the old subdomains redirect
-  there when `ROADMAP_WEBSITE_URL` is configured.
-- Authenticated maintainer mutation endpoints with explicit lifecycle gates.
-- A version-based Discord projection that edits one existing message and skips
-  unchanged visible hashes.
-- Feature Request and Bug Report forum ingestion, bot-mentioned follow-up evidence,
-  attachments, reactions, moderated status tags, reconciliation, and
-  active/archived thread support.
-- Cloudflare Worker, D1, cron, and static assets.
-- An independently deployable
-  [SakuraCord DiscordBot](https://github.com/SakuraCordApp/DiscordBot) using
-  free-tier Cloudflare queues for GitHub notifications.
-- A protocol-native MCP server with 19 canonical roadmap and tracker tools plus optional
-  read-only application-repository inspection.
-- A valid Codex plugin and roadmap-management skill.
-- A resumable, idempotent setup/doctor/deploy/upgrade CLI.
-- ChatGPT/Codex-plan OAuth through an encrypted Worker-side session; no Codex
-  CLI, self-hosted runner, or usage-billed OpenAI API key is required for
-  automatic Discord report analysis.
-
-## Architecture
+It also posts GitHub activity to the Discord updates channel (formerly the
+separate DiscordBot Worker) and publishes the roadmap message.
 
 ```mermaid
 flowchart LR
-  UI["Version roadmap"] --> API["Cloudflare Worker API"]
-  TR["Detailed tracker"] --> API
-  MCP["Codex plugin / MCP"] --> API
-  DI["Discord interactions"] --> API
-  CRON["Roadmap minute cron"] --> API
-  API --> SYNC["Discord sync core"]
-  API --> CORE["Typed roadmap engine"]
-  CORE --> D1[("Canonical D1 database")]
-  SYNC --> D1
-  SYNC --> RQ[("Discord report queue")]
-  RQ --> SYNC
-  SYNC --> DR["Discord REST API"]
-  API --> AI["ChatGPT OAuth transport"]
+  D["Discord<br/>/bug · /suggest · buttons · replies"] -->|interactions + 1-min poll| H["Hub Worker<br/>roadmap.sakuracord.app"]
+  W["sakuracord.app<br/>/report · /tracker"] -->|service-binding RPC| H
+  G["GitHub Issues<br/>(canonical)"] <-->|GitHub App webhooks + API| H
+  H -->|forum posts, tags, cards, status pings, mirrored comments| D
+  H --> DB[("D1: links, votes, cursors, cache")]
+  H --> V[("Vectorize: duplicate search")]
+  H -->|Luna triage| O["OpenAI API"]
+  G -->|agent: investigate / agent: fix labels| A["GitHub Actions<br/>Codex agents"]
 ```
 
-The D1 documents are authoritative. Version rows drive the public roadmap and
-Discord message; item rows drive the detailed Tracker and forum tags. MCP can
-manage both through the same revision-safe engine. Audit history and
-synchronization work are recorded in the same database mutation.
+## How it works
 
-## Quick start
+**GitHub is the source of truth.** Every report is an issue numbered `#N`.
+Status lives in exactly one `status: …` label (or the close reason); areas and
+priorities are labels; versions are milestones. The hub enforces one status,
+area, and priority label per issue.
 
-Requirements: Node.js 20.19 or later, npm, and a Cloudflare account for remote
-deployment. Discord is optional during local development.
+| Status               | GitHub representation                                                  | Discord tag          |
+| -------------------- | ---------------------------------------------------------------------- | -------------------- |
+| New                  | `status: new`                                                          | New                  |
+| Needs info           | `status: needs info`                                                   | Needs Info           |
+| Confirmed / Accepted | `status: confirmed`                                                    | Confirmed / Accepted |
+| Planned              | `status: planned` + milestone (automatic when a milestone is set)      | Planned              |
+| In progress          | `status: in progress` (automatic when a PR says `Fixes #N`)            | In Progress          |
+| In nightly           | `status: in nightly` (automatic when the fix lands on `nightly`)       | In Nightly           |
+| Shipped              | closed + `status: shipped` (automatic when a release contains the fix) | Shipped              |
+| Done                 | closed as completed                                                    | Shipped              |
+| Duplicate            | closed as duplicate                                                    | Duplicate            |
+| Declined / Won't fix | closed as not planned + `status: declined`                             | Declined / Won't Fix |
+| Can't reproduce      | closed as not planned + `status: can't reproduce`                      | Can't Reproduce      |
+
+**Filing.** People use `/bug`, `/suggest`, the buttons in the pinned forum
+posts and the roadmap message, the website form (Discord sign-in), or GitHub
+issue forms. All four share `src/report/schema.ts`. Before anything is filed,
+the hub searches for similar reports (bge-m3 embeddings in Vectorize) and
+offers "That's mine", which follows the existing report instead. Only the bot
+can create forum posts; everyone can reply in them.
+
+**Three-way conversation sync.** Replies in a report's Discord post become
+GitHub comments (polled every minute, including edits and deletions for 30
+minutes). Every GitHub comment appears in the Discord post under the author's
+name through a channel webhook. Website comments go to both. Each copy carries
+an origin marker so nothing echoes.
+
+**Notifications.** Reporters are pinged on every status change; voters ("Me
+too") are also pinged when a report lands in nightly, ships, or closes.
+Releases ping again when a fix reaches the regular (non-beta) channel.
+
+**AI pipeline.**
+
+1. _Triage_ (every new report, in the Worker, GPT-6 Luna): type, area,
+   priority, clean title, one-line summary, duplicate judgement against the 8
+   most similar reports, and questions when a bug can't be acted on.
+2. _Investigation_ (GitHub Actions, read-only Codex): bugs that pass triage get
+   `agent: investigate`; the agent finds the likely code and posts file/line
+   findings, which are mirrored to Discord.
+3. _Fix_ (maintainer-triggered): `agent: fix` (or Discord **Manage → Run fix
+   agent**) runs Codex on the `xcode-27` runner and opens a **draft** PR against
+   `nightly`. Nothing merges automatically.
+
+**Maintainers in Discord** use **Manage** on a report card to confirm, ask for
+info, plan for a milestone, mark duplicate/declined/can't reproduce, reopen, or
+run the agents. Every action is applied on GitHub first; Discord follows.
+
+## Layout
+
+| Path               | Purpose                                                  |
+| ------------------ | -------------------------------------------------------- |
+| `src/config.ts`    | SakuraCord IDs, areas, priorities, statuses              |
+| `src/report/`      | Shared report schema and the canonical issue-body format |
+| `src/lifecycle.ts` | Status derivation and label enforcement                  |
+| `src/sync/`        | Issue sync, triage, comments, PR/push/release tracking   |
+| `src/discord/`     | Interactions, modals, cards, forum projection            |
+| `src/github/`      | App auth, webhooks, activity feed                        |
+| `src/api/`         | Public `/api/v2`, attachment proxy, admin endpoints      |
+| `src/rpc.ts`       | Website RPC (report, me too, comment)                    |
+| `scripts/`         | Issue-form generator, tag icons, legacy migration        |
+
+## Operations
+
+Production deploys through Cloudflare Workers Builds on pushes to `main`
+(`npm run check`, then `npx wrangler deploy`). Never deploy from a local
+session; see `AGENTS.md`.
+
+Admin endpoints take `Authorization: Bearer $ROADMAP_ADMIN_TOKEN` (Keychain
+`dev.sakuracord.roadmap-maintainer`):
+
+| Endpoint                         | Use                                                                                                           |
+| -------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `GET /admin/status`              | Configuration, job counts, recent failures                                                                    |
+| `GET /admin/discord/permissions` | Missing bot permissions                                                                                       |
+| `POST /admin/setup/github`       | Create/update labels                                                                                          |
+| `POST /admin/setup/discord`      | Forum tags, posting lock, guide posts, webhooks, commands (body: `{"emojis": <npm run tag-icons -- --json>}`) |
+| `POST /admin/reconcile`          | Resync from GitHub (`{"full": true}` for everything)                                                          |
+| `POST /admin/reindex`            | Rebuild duplicate-search embeddings                                                                           |
+| `POST /admin/retriage/:number`   | Run AI triage again                                                                                           |
+
+Secrets: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`,
+`GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (PKCS#8), `GITHUB_APP_WEBHOOK_SECRET`,
+`OPENAI_API_KEY`, `ROADMAP_ADMIN_TOKEN`. The GitHub App's webhook URL is
+`https://roadmap.sakuracord.app/webhooks/github-app`.
+
+Editing the report form: change `src/report/schema.ts`, then regenerate the
+GitHub issue forms in the app repository with
+`npm run issue-forms -- ../SakuraCord/.github/ISSUE_TEMPLATE` and commit them
+on `main`.
+
+Everything runs on free tiers: Workers, D1, Queues, Vectorize, and Workers AI
+on Cloudflare, plus GitHub Actions for the public repository. The only paid
+part is OpenAI API usage (Luna for triage and investigation, Sol for fixes).
+
+## Development
 
 ```sh
 npm install
-npm run build --workspace @roadmap/cli
-npm run roadmap -- setup --dry-run
-npm run roadmap -- setup
+npm run check   # format, types, lint, tests, dry-run build
+npm run dev     # local Worker (needs .dev.vars)
 ```
-
-The wizard prints all local and external changes before applying them. It
-configures the project taxonomy, Cloudflare/D1, Discord, MCP, Codex, and optional
-initial data. It never writes tokens to tracked files. Forum synchronization
-runs in the Roadmap Worker. Deploy
-[DiscordBot](https://github.com/SakuraCordApp/DiscordBot) separately when queued
-GitHub-to-Discord notifications are wanted.
-
-For local-only development:
-
-```sh
-npm install
-npx wrangler d1 migrations apply sakuracord-roadmap --local
-npm run build --workspace @roadmap/web
-npm run dev
-```
-
-Copy `.env.example` to `.dev.vars` only for local secrets. `.dev.vars` is ignored.
-
-## CLI
-
-```text
-roadmap setup
-roadmap setup --dry-run
-roadmap doctor
-roadmap deploy
-roadmap migrate
-roadmap discord configure
-roadmap discord verify
-roadmap releases configure
-roadmap releases connect-ai
-roadmap releases status
-roadmap mcp install
-roadmap codex install
-roadmap import
-roadmap export
-roadmap reconcile
-roadmap upgrade
-```
-
-Every mutation command reports exact API or provider failures. `--json` produces
-machine-readable output; setup supports explicit non-interactive flags for CI.
-
-## Customize a fork
-
-Safe instance-specific values live in `roadmap.instance.json`. Reusable
-SakuraCord defaults and type validation live in `roadmap.config.ts` and
-`packages/core/src/config.ts`. Arrays replace defaults; objects merge deeply.
-
-The setup wizard can configure:
-
-- project identity, public URL, branding, and application repository;
-- areas, item types, lifecycle, priorities, and their colors;
-- Cloudflare Worker and D1 names;
-- Discord guild, forums, roadmap channel, unified tags, generated emoji, and
-  maintainer roles;
-- ChatGPT model, reasoning effort, encrypted OAuth, and automatic report
-  analysis;
-- local or remote MCP; and
-- empty or file-imported initial data.
-
-See [Configuration](docs/CONFIGURATION.md) for the full contract.
-
-## Documentation
-
-- [Architecture](docs/ARCHITECTURE.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Setup and deployment](docs/DEPLOYMENT.md)
-- [Public and maintainer API](docs/API.md)
-- [Discord integration](docs/DISCORD.md)
-- [Release automation ownership](docs/RELEASES.md)
-- [Gateway decision and fallback](docs/GATEWAY.md)
-- [MCP and Codex](docs/MCP_CODEX.md)
-- [Security](docs/SECURITY.md)
-- [Operations, backup, and recovery](docs/OPERATIONS.md)
-- [Upgrades](docs/UPGRADING.md)
-- [Development and testing](docs/DEVELOPMENT.md)
-- [Implementation report](docs/IMPLEMENTATION_REPORT.md)
-- [Contributing](CONTRIBUTING.md)
-
-## Verification
-
-Run the complete local gate:
-
-```sh
-npm run check
-```
-
-It formats, lints, type-checks, runs unit/integration/security/migration tests,
-and builds the Worker, web app, MCP server, and CLI. External
-Discord and Cloudflare write verification is only run by explicit CLI commands
-with valid credentials.
 
 ## License
 

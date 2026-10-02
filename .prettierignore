@@ -1,7 +1,5 @@
 dist
-dist-types
-coverage
-node_modules
 .wrangler
+node_modules
 package-lock.json
-apps/web/public
+src/worker-configuration.d.ts

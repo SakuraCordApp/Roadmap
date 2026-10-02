@@ -1,32 +1,35 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
   "name": "sakuracord-roadmap",
-  "main": "apps/worker/src/index.ts",
-  "compatibility_date": "2026-07-26",
-  "assets": {
-    "directory": "apps/web/dist",
-    "binding": "ASSETS",
-    "not_found_handling": "single-page-application",
-    "run_worker_first": [
-      "/",
-      "/index.html",
-      "/api/*",
-      "/interactions/*",
-      "/webhooks/*",
-      "/mcp*",
-      "/healthz",
-      "/tracker*",
-      "/items/*",
-    ],
-  },
+  "main": "src/index.ts",
+  "compatibility_date": "2026-09-28",
+  "compatibility_flags": ["nodejs_compat"],
+  "account_id": "20aea060f70461a418cf31bc70b79cdc",
+  "routes": [
+    { "pattern": "roadmap.sakuracord.app", "custom_domain": true },
+    { "pattern": "tracker.sakuracord.app", "custom_domain": true },
+  ],
   "d1_databases": [
     {
       "binding": "DB",
       "database_name": "sakuracord-roadmap",
       "database_id": "dedb4e6e-2de8-4d9c-8405-fe7fa1e08ffd",
-      "migrations_dir": "migrations",
     },
   ],
+  "ai": { "binding": "AI" },
+  "vectorize": [{ "binding": "VECTORIZE", "index_name": "sakuracord-issues" }],
+  "queues": {
+    "producers": [{ "binding": "JOBS", "queue": "sakuracord-discord-reports" }],
+    "consumers": [
+      {
+        "queue": "sakuracord-discord-reports",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_concurrency": 1,
+        "max_retries": 3,
+      },
+    ],
+  },
   "ratelimits": [
     {
       "name": "PUBLIC_RATE_LIMITER",
@@ -34,60 +37,21 @@
       "simple": { "limit": 300, "period": 60 },
     },
     {
-      "name": "MUTATION_RATE_LIMITER",
-      "namespace_id": "1002",
-      "simple": { "limit": 60, "period": 60 },
+      "name": "REPORT_RATE_LIMITER",
+      "namespace_id": "1003",
+      "simple": { "limit": 6, "period": 60 },
     },
   ],
   "migrations": [
-    {
-      "tag": "v1",
-      "new_sqlite_classes": ["DiscordGatewayObject"],
-    },
-    {
-      "tag": "v2",
-      "deleted_classes": ["DiscordGatewayObject"],
-    },
+    { "tag": "v1", "new_sqlite_classes": ["DiscordGatewayObject"] },
+    { "tag": "v2", "deleted_classes": ["DiscordGatewayObject"] },
   ],
-  "triggers": {
-    "crons": ["* * * * *"],
-  },
-  "queues": {
-    "producers": [
-      {
-        "binding": "DISCORD_REPORTS_QUEUE",
-        "queue": "sakuracord-discord-reports",
-      },
-    ],
-    "consumers": [
-      {
-        "queue": "sakuracord-discord-reports",
-        "max_batch_size": 1,
-        "max_batch_timeout": 1,
-        "max_retries": 10,
-        "retry_delay": 5,
-      },
-    ],
-  },
+  "triggers": { "crons": ["* * * * *"] },
   "vars": {
-    "ROADMAP_WEBSITE_URL": "https://sakuracord.app",
-    "ROADMAP_PUBLIC_URL": "https://roadmap.sakuracord.app",
-    "ROADMAP_ALLOWED_ORIGINS": "https://roadmap.sakuracord.app,https://tracker.sakuracord.app",
-    "ROADMAP_GATEWAY_PROVIDER": "cloudflare",
+    "WEBSITE_URL": "https://sakuracord.app",
+    "HUB_URL": "https://roadmap.sakuracord.app",
+    "TRIAGE_MODEL": "gpt-6-luna",
+    "TRIAGE_REASONING_EFFORT": "medium",
   },
-  "observability": {
-    "enabled": true,
-    "head_sampling_rate": 1,
-  },
-  "account_id": "20aea060f70461a418cf31bc70b79cdc",
-  "routes": [
-    {
-      "pattern": "roadmap.sakuracord.app",
-      "custom_domain": true,
-    },
-    {
-      "pattern": "tracker.sakuracord.app",
-      "custom_domain": true,
-    },
-  ],
+  "observability": { "enabled": true, "head_sampling_rate": 1 },
 }
