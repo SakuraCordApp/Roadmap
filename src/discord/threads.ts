@@ -1,6 +1,8 @@
 import { DISCORD, STATUS_BY_ID, type IssueKind, type StatusId } from "../config";
 import {
   getJsonState,
+  getState,
+  setState,
   primaryThread,
   saveThread,
   setThreadCursor,
@@ -168,6 +170,24 @@ export async function projectIssue(
     primary = await createThread(env, issue, { pingReporter: false });
     created = true;
   }
+  if (primary.forumId !== forumFor(issue.kind)) {
+    const old = primary;
+    const matching = (await threadsForIssue(env.DB, issue.number)).find(
+      (thread) => thread.forumId === forumFor(issue.kind) && thread.role === "primary",
+    );
+    primary = matching ?? (await createThread(env, issue, { pingReporter: false }));
+    await setState(env.DB, `discord:relocated:${old.threadId}`, "1");
+    await saveThread(env.DB, { ...old, role: "merged", stateHash: null });
+    await postInThread(
+      env,
+      primary.threadId,
+      {
+        content: `Reclassified as a ${issue.kind === "bug" ? "bug" : "feature suggestion"}. [Previous discussion](${threadUrl(DISCORD.guildId, old.threadId)}) remains available; continue here.`,
+        allowed_mentions: noMentions,
+      },
+      { nonceKey: `reclassified:${old.threadId}:${primary.threadId}` },
+    );
+  }
   const closed = !STATUS_BY_ID.get(issue.status)!.open;
   const tags = await tagsFor(env, primary.forumId, issue);
   const desiredState = { name: truncate(issue.title, 100), tags, closed };
@@ -278,7 +298,8 @@ async function forgetThread(env: Env, threadId: string) {
 
 async function projectMergedThread(env: Env, thread: ThreadRecord, issue: IssueRecord) {
   const forum = (await getJsonState<ForumTagMap>(env.DB, TAG_STATE_KEY, {}))[thread.forumId];
-  const tags = forum?.status.duplicate ? [forum.status.duplicate] : [];
+  const relocated = (await getState(env.DB, `discord:relocated:${thread.threadId}`)) === "1";
+  const tags = !relocated && forum?.status.duplicate ? [forum.status.duplicate] : [];
   const stateHash = await sha256(JSON.stringify({ merged: issue.number, tags }));
   if (thread.stateHash === stateHash) return;
   const discord = discordClient(env);
@@ -297,7 +318,7 @@ async function projectMergedThread(env: Env, thread: ThreadRecord, issue: IssueR
   await discord.post(
     `/channels/${thread.threadId}/messages`,
     {
-      content: `🔁 **Merged into #${issue.number}: ${truncate(issue.title, 150)}.**${
+      content: `🔁 **${relocated ? "Reclassified — continue with" : "Merged into"} #${issue.number}: ${truncate(issue.title, 150)}.**${
         primary ? ` Follow ${threadUrl(DISCORD.guildId, primary.threadId)} for updates.` : ""
       }`,
       allowed_mentions: noMentions,

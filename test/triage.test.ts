@@ -25,6 +25,8 @@ vi.mock("../src/github/client", () => ({
 vi.mock("../src/github/identity", () => ({ appBotLogin: async () => "sakuracord-bot[bot]" }));
 vi.mock("../src/db/store", () => ({
   getIssue: async () => state.issue,
+  getJsonState: async (_db: unknown, key: string, fallback: unknown) =>
+    state.values.has(key) ? JSON.parse(state.values.get(key)!) : fallback,
   getState: async (_db: unknown, key: string) => state.values.get(key) ?? null,
   setState: async (_db: unknown, key: string, value: string) => {
     state.values.set(key, value);
@@ -46,7 +48,8 @@ beforeEach(async () => {
   state.issue = {
     number: 51,
     title: "Original report",
-    body: "Report details",
+    body: "### SakuraCord version\n0.1.6\n\n### What happened?\nReport details",
+    fixes: [],
     kind: "bug",
     state: "open",
     status: "new",
@@ -81,9 +84,18 @@ beforeEach(async () => {
   state.comment = { id: 10, user: { login: "github-actions[bot]", type: "Bot" } };
   refreshComment();
   state.request.mockImplementation(async (method: string, path: string, body?: any) => {
+    if (path.endsWith("/releases/latest"))
+      return {
+        tag_name: "v0.1.6",
+        draft: false,
+        prerelease: false,
+        published_at: "2026-10-01T00:00:00Z",
+        html_url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v0.1.6",
+      };
+    if (path.includes("/releases?")) return [];
     if (method === "GET") return path.includes("/comments/") ? state.comment : state.current;
     if (method === "PATCH") Object.assign(state.current, body);
-    if (method === "POST") state.current.labels.push(...body.labels);
+    if (method === "POST" && body.labels) state.current.labels.push(...body.labels);
     if (method === "DELETE")
       state.current.labels = state.current.labels.filter(
         (label: string) => label !== "agent: investigate",
@@ -113,8 +125,8 @@ describe("combined assessment", () => {
     state.current.labels = ["status: new"];
     await runTriage(env, { number: 51 });
     await runTriage(env, { number: 51 });
-    expect(state.request.mock.calls.filter(([method]) => method === "POST")).toEqual([
-      ["POST", "/issues/51/labels", { labels: ["agent: investigate"] }],
+    expect(state.request.mock.calls.filter(([method]) => method === "PATCH")).toEqual([
+      ["PATCH", "/issues/51", { labels: ["status: new", "agent: investigate"] }],
     ]);
   });
 
@@ -160,5 +172,74 @@ describe("combined assessment", () => {
     expect(state.request.mock.calls.some(([method]) => method === "PATCH")).toBe(false);
     expect(state.enqueue).toHaveBeenCalledWith(env, "triage", "51", { number: 51, force: true });
     expect(state.issue.triagedAt).toBeNull();
+  });
+  it("holds unsupported GitHub reports until the version is corrected", async () => {
+    state.current.labels = ["status: new"];
+    state.current.body = "### SakuraCord version\n0.1.1";
+    await runTriage(env, { number: 51 });
+    expect(state.current.labels).toContain("status: needs info");
+    expect(state.current.labels).not.toContain("agent: investigate");
+    state.issue.status = "needs_info";
+    state.current.body = state.issue.body;
+    await runTriage(env, { number: 51 });
+    expect(state.current.labels).toContain("agent: investigate");
+    expect(state.current.labels).not.toContain("status: needs info");
+  });
+
+  it("tracks a verified unreleased fix without marking it shipped", async () => {
+    result.confidence = "high";
+    result.triage.needsInformation = false;
+    result.triage.questions = [];
+    result.triage.resolution = {
+      state: "fixed_unreleased",
+      commit: "a".repeat(40),
+      releaseTag: null,
+      explanation: "Not published yet.",
+    };
+    refreshComment();
+    await applyTriageResult(env, { number: 51, commentId: 10 });
+    expect(state.current.labels).toContain("status: in nightly");
+    expect(state.issue.fixes[0].sha).toBe("a".repeat(40));
+    expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
+  });
+
+  it("retries release tracking after GitHub metadata was already applied", async () => {
+    result.confidence = "high";
+    result.triage.needsInformation = false;
+    result.triage.questions = [];
+    result.triage.resolution = {
+      state: "fixed_nightly",
+      commit: "a".repeat(40),
+      releaseTag: "v0.1.7-Beta-1",
+      explanation: "Published in nightly.",
+    };
+    refreshComment();
+    state.enqueue.mockRejectedValueOnce(new Error("Temporary database failure"));
+    await expect(applyTriageResult(env, { number: 51, commentId: 10 })).rejects.toThrow(
+      "Temporary database failure",
+    );
+    expect(state.current.labels).toContain("status: in nightly");
+    await applyTriageResult(env, { number: 51, commentId: 10 });
+    expect(state.enqueue).toHaveBeenCalledWith(
+      env,
+      "ship",
+      "51:v0.1.7-Beta-1",
+      expect.objectContaining({ tag: "v0.1.7-Beta-1" }),
+    );
+  });
+
+  it("keeps a possible regression open instead of reusing its old fix", async () => {
+    result.confidence = "high";
+    result.triage.resolution = {
+      state: "possible_regression",
+      commit: "a".repeat(40),
+      releaseTag: "v0.1.6",
+      explanation: "Already in the reported release.",
+    };
+    refreshComment();
+    await applyTriageResult(env, { number: 51, commentId: 10 });
+    expect(state.current.labels).toContain("status: needs info");
+    expect(state.issue.fixes).toEqual([]);
+    expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
   });
 });

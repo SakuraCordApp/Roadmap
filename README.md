@@ -64,15 +64,29 @@ Releases ping again when a fix reaches the regular (non-beta) channel.
 1. _Triage and investigation_ (one GitHub Actions job, read-only Codex with
    GPT-6 Luna): every new bug or feature request gets `agent: investigate`.
    The agent reads nightly's source, the report, up to 30 recent comments,
-   up to four downloaded screenshots, and eight similar report summaries.
+   up to four downloaded screenshots, and up to twelve similar reports, including closed reports and both categories.
+   Candidate search combines full-text and semantic matches; text search still
+   works when semantic search is unavailable.
    It returns type, area, priority, title, summary, duplicate suggestions,
    missing-information questions, and code findings in one assessment comment.
    The hub validates the Actions-authored result, applies metadata on GitHub,
    and mirrors the comment. Duplicate suggestions never auto-close a report.
-   No separate Luna call runs inside the Worker.
+   Misclassified reports move to the correct Discord forum, retaining the old
+   discussion with a link to the new post. No separate Luna call runs inside the Worker.
+   The workflow verifies claimed fix commits against the reported release,
+   latest published nightly, latest regular release, and current nightly code.
+   High-confidence existing fixes enter release tracking; unreleased fixes stay
+   open until a release contains them. A report whose build already contains the
+   claimed fix remains open for regression investigation.
 2. _Fix_ (maintainer-triggered): `agent: fix` or **Manage → Run fix agent**
    runs Codex with GPT-6 Luna on the `xcode-27` runner and opens a **draft** PR
    against `nightly`. Nothing merges automatically.
+
+New bugs and suggestions must use the latest published nightly or latest
+regular release. Website and Discord offer only those two choices; the hub
+validates them again before filing. Native GitHub reports with old, missing,
+or source-build versions are held for an update and retest. Accepted reports
+keep their original release context as newer versions are published.
 
 The assessment label stays until its result is applied. Failed runs can be
 retried in Actions or through **Manage → Run triage & investigation**. Reporter

@@ -1,3 +1,4 @@
+import { setState } from "../db/store";
 import { FEED_REPOSITORIES, NIGHTLY_BRANCH, REPOSITORY_SLUG } from "../config";
 import { claimDelivery, getIssue } from "../db/store";
 import type { Env } from "../env";
@@ -97,6 +98,7 @@ async function routeRepositoryEvent(
       }
       return;
     case "release":
+      await setState(env.DB, "github:releases-refreshed", "0");
       if (action === "published" && !payload.release?.draft) {
         await enqueue(env, "release", payload.release.tag_name, {
           tag: payload.release.tag_name,

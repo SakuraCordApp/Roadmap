@@ -158,7 +158,7 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
   if (
     (record.kind || !issue.type) &&
     record.state === "open" &&
-    record.status === "new" &&
+    ["new", "needs_info"].includes(record.status) &&
     !record.triagedAt &&
     env.GITHUB_APP_ID
   ) {

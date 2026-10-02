@@ -15,6 +15,13 @@ export interface FixRef {
 }
 
 export interface TriageResult {
+  resolution?: {
+    state:
+      "unresolved" | "possible_regression" | "fixed_unreleased" | "fixed_nightly" | "fixed_regular";
+    commit: string | null;
+    releaseTag: string | null;
+    explanation: string;
+  };
   kind: IssueKind;
   area: string;
   priority: string;

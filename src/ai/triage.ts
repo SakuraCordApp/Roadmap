@@ -10,8 +10,9 @@ const resultSchema = z.object({
   number: z.number().int().positive(),
   sourceTitle: z.string().max(256),
   bodyHash: z.string().regex(/^[a-f0-9]{64}$/),
-  candidates: z.array(z.number().int().positive()).max(8),
+  candidates: z.array(z.number().int().positive()).max(12),
   model: z.string().min(1).max(100),
+  confidence: z.enum(["low", "medium", "high"]).optional(),
   triage: z.object({
     kind: z.enum(["bug", "feature"]),
     area: z.string().refine((id) => AREAS.some((area) => area.id === id)),
@@ -23,6 +24,23 @@ const resultSchema = z.object({
     duplicateReason: z.string().max(400),
     needsInformation: z.boolean(),
     questions: z.array(z.string().min(1).max(300)).max(3),
+    resolution: z
+      .object({
+        state: z.enum([
+          "unresolved",
+          "possible_regression",
+          "fixed_unreleased",
+          "fixed_nightly",
+          "fixed_regular",
+        ]),
+        commit: z
+          .string()
+          .regex(/^[a-f0-9]{40}$/)
+          .nullable(),
+        releaseTag: z.string().max(100).nullable(),
+        explanation: z.string().max(1000),
+      })
+      .optional(),
   }),
 });
 

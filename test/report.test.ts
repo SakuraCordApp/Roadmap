@@ -1,3 +1,4 @@
+import { matchingRelease, selectReportReleases } from "../src/releases";
 import { describe, expect, it } from "vitest";
 import {
   parseMeta,
@@ -84,5 +85,30 @@ describe("parseModal", () => {
     });
     expect(parsed.values).toEqual({ title: "Crash", impact: "crash", version: "0.1.6" });
     expect(parsed.attachments).toEqual([expect.objectContaining({ id: "99", filename: "x.png" })]);
+  });
+});
+
+describe("supported release intake", () => {
+  it("allows exactly the latest published release in each channel", () => {
+    const release = (tag: string, date: string, prerelease: boolean, draft = false) => ({
+      tag_name: tag,
+      published_at: date,
+      prerelease,
+      draft,
+      name: tag,
+      html_url: `https://example.com/${tag}`,
+    });
+    const choices = selectReportReleases([
+      release("v0.1.6", "2026-10-01", false),
+      release("v0.1.5", "2026-09-01", false),
+      release("v0.1.7-Beta-2", "2026-10-02", true),
+      release("v0.1.7-Beta-1", "2026-09-29", true),
+      release("v0.1.7-Beta-3", "2026-10-03", true, true),
+    ]);
+    expect(choices.map((r) => r.tag)).toEqual(["v0.1.7-Beta-2", "v0.1.6"]);
+    expect(matchingRelease("0.1.7 Beta 2", choices)?.channel).toBe("nightly");
+    expect(matchingRelease("v0.1.6", choices)?.channel).toBe("regular");
+    for (const version of ["0.1.5", "0.1.7 Beta 1", "Built from source", "Other / not sure", ""])
+      expect(matchingRelease(version, choices)).toBeUndefined();
   });
 });

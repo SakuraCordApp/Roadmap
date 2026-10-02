@@ -8,9 +8,6 @@ import {
 } from "../report/schema";
 import { truncate } from "../util/text";
 
-export const VERSION_FROM_SOURCE = "Built from source";
-export const VERSION_UNKNOWN = "Other / not sure";
-
 function fieldComponent(field: ReportField, prefill: ReportValues, versions: string[]) {
   const value = prefill[field.id];
   switch (field.kind) {
@@ -37,18 +34,15 @@ function fieldComponent(field: ReportField, prefill: ReportValues, versions: str
         })),
       };
     case "version": {
-      const choices = [...new Set([...(value ? [value] : []), ...versions])].slice(0, 22);
+      const choices = [...new Set(versions)].slice(0, 2);
       return {
         type: 3,
         custom_id: field.id,
         required: field.required,
         placeholder: "Pick the version you're using",
-        options: [...choices, VERSION_FROM_SOURCE, VERSION_UNKNOWN].map((choice, index) => ({
+        options: choices.map((choice) => ({
           label: choice,
           value: choice,
-          ...(index === 0 && choice !== VERSION_UNKNOWN && versions[0] === choice
-            ? { description: "Latest" }
-            : {}),
           ...(choice === value ? { default: true } : {}),
         })),
       };

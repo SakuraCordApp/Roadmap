@@ -1,7 +1,22 @@
-import { issueEmbeddingText, similarTo } from "../ai/embeddings";
+import { searchReports } from "../ai/search";
+import {
+  checkReportVersion,
+  matchingRelease,
+  reportReleases,
+  type ReportRelease,
+} from "../releases";
+import { issueEmbeddingText } from "../ai/embeddings";
 import { parseTriageResult } from "../ai/triage";
-import { AGENT_LABELS, AREAS, PRIORITIES, ISSUE_TYPES, areaLabel, priorityLabel } from "../config";
-import { getIssue, getState, patchIssue, setState } from "../db/store";
+import {
+  AGENT_LABELS,
+  AREAS,
+  PRIORITIES,
+  ISSUE_TYPES,
+  REPOSITORY_URL,
+  areaLabel,
+  priorityLabel,
+} from "../config";
+import { getIssue, getJsonState, getState, patchIssue, setState } from "../db/store";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
 import { appBotLogin } from "../github/identity";
@@ -12,28 +27,47 @@ import { valuesFromBody } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { nowIso } from "../util/text";
 
-/** Public report context for the read-only Actions agent, bounded to eight candidates. */
+/** Public report context for the read-only Actions agent, bounded to twelve candidates. */
 export async function assessmentContext(env: Env, number: number) {
   const issue = await getIssue(env.DB, number);
   if (!issue) return null;
-  const matches = await similarTo(env, issueEmbeddingText(issue), {
-    topK: 8,
+  const matches = await searchReports(env, issueEmbeddingText(issue), {
+    limit: 12,
     exclude: number,
-  }).catch(() => []);
-  const candidates = [];
-  for (const match of matches) {
-    const candidate = await getIssue(env.DB, match.number);
-    if (candidate)
-      candidates.push({
-        number: candidate.number,
-        title: candidate.title,
-        summary: candidate.summary,
-        kind: candidate.kind,
-        status: candidate.status,
-        similarity: match.score,
-      });
-  }
-  return { areas: AREAS, priorities: PRIORITIES, candidates };
+  });
+  const releases = await reportReleases(env);
+  const reportedVersion = valuesFromBody(issue.kind ?? "bug", issue.body).version ?? "";
+  const reportedRelease =
+    (await getJsonState<ReportRelease | null>(env.DB, `report:release:${number}`, null)) ??
+    matchingRelease(reportedVersion, releases) ??
+    null;
+  const candidates = matches.map(({ issue: candidate, score }) => ({
+    number: candidate.number,
+    title: candidate.title,
+    summary: candidate.summary,
+    body: candidate.body.slice(0, 1800),
+    kind: candidate.kind,
+    status: candidate.status,
+    fixes: [
+      ...candidate.fixes,
+      ...(candidate.triage?.resolution?.commit &&
+      !candidate.fixes.some((fix) => fix.sha === candidate.triage?.resolution?.commit)
+        ? [{ kind: "commit", sha: candidate.triage.resolution.commit, state: "merged" }]
+        : []),
+    ],
+    shippedIn: candidate.shippedIn,
+    shippedStableIn: candidate.shippedStableIn,
+    similarity: score || null,
+  }));
+  return {
+    areas: AREAS,
+    priorities: PRIORITIES,
+    candidates,
+    reportedVersion,
+    reportedRelease,
+    reportedKind: issue.kind,
+    releases,
+  };
 }
 
 /** A single label starts the combined triage/investigation agent. No LLM runs here. */
@@ -45,15 +79,22 @@ export async function runTriage(
   if (
     !issue ||
     issue.state !== "open" ||
-    (!payload.force && (issue.status !== "new" || issue.triagedAt))
+    (!payload.force && (!["new", "needs_info"].includes(issue.status) || issue.triagedAt))
   )
     return;
   const github = new GitHub(env);
   const current = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
   if (current.state !== "open" || labelNames(current).includes(AGENT_LABELS.investigate.name))
     return;
-  await github.request("POST", github.repo(`/issues/${issue.number}/labels`), {
-    labels: [AGENT_LABELS.investigate.name],
+  if (!(await checkReportVersion(env, current))) return;
+  await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
+    labels: [
+      ...labelNames(current).filter((name) => name !== statusGithubLabel("needs_info")),
+      AGENT_LABELS.investigate.name,
+      ...(labelNames(current).includes(statusGithubLabel("needs_info")!)
+        ? [statusGithubLabel("new")!]
+        : []),
+    ],
   });
 }
 
@@ -91,12 +132,42 @@ export async function applyTriageResult(
     await setState(env.DB, key, hash);
     return;
   }
+  const inTriage = ![...labels].some(
+    (name) =>
+      name.startsWith("status: ") &&
+      ![statusGithubLabel("new"), statusGithubLabel("needs_info")].includes(name),
+  );
+  const resolution = result.resolution;
+  const confirmedFix =
+    current.state === "open" &&
+    (inTriage ||
+      (labels.has(statusGithubLabel("in_nightly")!) &&
+        issue.triage?.resolution?.commit === resolution?.commit &&
+        issue.fixes.some((fix) => fix.sha === resolution?.commit))) &&
+    envelope.confidence === "high" &&
+    !result.needsInformation &&
+    !result.duplicateOf &&
+    resolution?.commit &&
+    ["fixed_unreleased", "fixed_nightly", "fixed_regular"].includes(resolution.state);
   // Cache before removing the trigger label, so its webhook cannot start a
   // second run. Result retries still apply GitHub changes if that write failed.
   await patchIssue(env.DB, issue.number, {
     summary: result.summary,
     triage: result,
     triagedAt: nowIso(),
+    ...(confirmedFix
+      ? {
+          fixes: [
+            ...issue.fixes.filter((fix) => fix.sha !== resolution!.commit),
+            {
+              kind: "commit" as const,
+              sha: resolution!.commit!,
+              url: `${REPOSITORY_URL}/commit/${resolution!.commit}`,
+              state: "merged" as const,
+            },
+          ],
+        }
+      : {}),
   });
   labels.delete(AGENT_LABELS.investigate.name);
   const patch: Record<string, unknown> = {};
@@ -106,11 +177,6 @@ export async function applyTriageResult(
       labels.add(areaLabel(chosen ?? result.area));
     }
     // Maintainer decisions made after intake take precedence over automated triage.
-    const inTriage = ![...labels].some(
-      (name) =>
-        name.startsWith("status: ") &&
-        ![statusGithubLabel("new"), statusGithubLabel("needs_info")].includes(name),
-    );
     if (inTriage) {
       for (const name of [...labels]) if (name.startsWith("priority: ")) labels.delete(name);
       labels.add(priorityLabel(result.priority));
@@ -120,7 +186,7 @@ export async function applyTriageResult(
         !(result.duplicateOf && result.duplicateConfidence >= 0.75);
       labels.delete(statusGithubLabel("new")!);
       labels.delete(statusGithubLabel("needs_info")!);
-      labels.add(statusGithubLabel(ask ? "needs_info" : "new")!);
+      labels.add(statusGithubLabel(ask ? "needs_info" : confirmedFix ? "in_nightly" : "new")!);
     }
     if (current.type?.name !== ISSUE_TYPES[result.kind].githubType)
       patch.type = ISSUE_TYPES[result.kind].githubType;
@@ -136,5 +202,11 @@ export async function applyTriageResult(
   patch.labels = [...labels];
   await github.request("PATCH", github.repo(`/issues/${issue.number}`), patch);
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
+  if (confirmedFix && resolution?.releaseTag)
+    await enqueue(env, "ship", `${issue.number}:${resolution.releaseTag}`, {
+      number: issue.number,
+      tag: resolution.releaseTag,
+      url: `${REPOSITORY_URL}/releases/tag/${encodeURIComponent(resolution.releaseTag)}`,
+    });
   await setState(env.DB, key, hash);
 }

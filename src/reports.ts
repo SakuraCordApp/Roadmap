@@ -1,11 +1,11 @@
-import { SIMILAR_THRESHOLD, similarTo } from "./ai/embeddings";
+import { cachedReportReleases, reportReleases, requireSupportedVersion } from "./releases";
+import { searchReports } from "./ai/search";
 import {
   DISCORD,
   ISSUE_TYPES,
   STATUS_BY_ID,
   areaLabel,
   priorityLabel,
-  releaseDisplayName,
   statusLabel,
   type IssueKind,
 } from "./config";
@@ -14,8 +14,6 @@ import {
   addSubscriber,
   claimDraft,
   getIssue,
-  getJsonState,
-  getState,
   primaryThread,
   saveDraft,
   saveIssue,
@@ -37,7 +35,7 @@ import {
 } from "./discord/threads";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
-import type { GhIssue, GhRelease } from "./github/types";
+import type { GhIssue } from "./github/types";
 import { enqueue } from "./jobs/queue";
 import { statusGithubLabel } from "./lifecycle";
 import {
@@ -69,28 +67,15 @@ export interface SimilarReport {
   url: string;
   trackerUrl: string;
   threadUrl: string | null;
+  resolution: string | null;
 }
 
 export async function findSimilar(env: Env, text: string, limit = 3): Promise<SimilarReport[]> {
-  if (text.trim().length < 8) return [];
-  // An exact title must not disappear because its short query scores below the
-  // threshold against a long report body. It also avoids an unnecessary AI call.
-  const title = text.trim().split("\n", 1)[0]!.trim();
-  const exact = await env.DB.prepare(
-    "SELECT number FROM issues WHERE lower(title)=lower(?) AND status!='duplicate' AND kind IS NOT NULL LIMIT ?",
-  )
-    .bind(title, limit)
-    .all<{ number: number }>();
-  const matches = exact.results.length
-    ? exact.results.map(({ number }) => ({ number, score: 1 }))
-    : await similarTo(env, text, { topK: 8, minScore: SIMILAR_THRESHOLD }).catch((error) => {
-        console.error("Similar report search failed", error);
-        return [];
-      });
+  if (text.trim().length < 4) return [];
+  const matches = await searchReports(env, text, { limit });
   const results: SimilarReport[] = [];
-  for (const match of matches) {
-    const issue = await getIssue(env.DB, match.number);
-    if (!issue?.kind || issue.status === "duplicate") continue;
+  for (const { issue, score } of matches) {
+    if (!issue.kind) continue;
     const thread = await primaryThread(env.DB, issue.number);
     results.push({
       number: issue.number,
@@ -100,7 +85,14 @@ export async function findSimilar(env: Env, text: string, limit = 3): Promise<Si
       statusLabel: statusLabel(issue.status, issue.kind),
       open: STATUS_BY_ID.get(issue.status)!.open,
       votes: await voteCount(env.DB, issue.number),
-      score: match.score,
+      score,
+      resolution: issue.shippedStableIn
+        ? `Available in regular release ${issue.shippedStableIn}.`
+        : issue.shippedIn
+          ? `Available in nightly ${issue.shippedIn}; not yet in a regular release.`
+          : issue.fixes.some((fix) => fix.state === "merged")
+            ? "A fix is in the code but has not shipped in a release yet."
+            : null,
       url: issueUrl(issue.number),
       trackerUrl: trackerUrl(env.WEBSITE_URL, issue.number),
       threadUrl: thread ? threadUrl(DISCORD.guildId, thread.threadId) : null,
@@ -110,41 +102,12 @@ export async function findSimilar(env: Env, text: string, limit = 3): Promise<Si
   return results;
 }
 
-/** Cached version choices only — safe inside Discord's 3-second interaction window. */
+/** Discord uses cached choices within its three-second interaction window. */
 export async function cachedVersionOptions(env: Env): Promise<string[]> {
-  const cached = await getJsonState<{ at: number; versions: string[] } | null>(
-    env.DB,
-    "github:release-versions",
-    null,
-  );
-  return cached?.versions ?? [];
+  return (await cachedReportReleases(env)).map((release) => release.version);
 }
-
-/** Version choices for the report form, newest first (refreshes from GitHub when stale). */
 export async function versionOptions(env: Env): Promise<string[]> {
-  const cached = await getJsonState<{ at: number; versions: string[] } | null>(
-    env.DB,
-    "github:release-versions",
-    null,
-  );
-  const stale = (await getState(env.DB, "github:releases-refreshed")) === "0";
-  if (cached && !stale && Date.now() - cached.at < 3600_000) return cached.versions;
-  try {
-    const github = new GitHub(env);
-    const releases = await github.request<GhRelease[]>("GET", github.repo("/releases?per_page=30"));
-    const published = releases.filter((release) => !release.draft);
-    const nightly = published.filter((release) => release.prerelease).slice(0, 3);
-    const stable = published.filter((release) => !release.prerelease).slice(0, 3);
-    const versions = [...nightly, ...stable]
-      .sort((a, b) => Date.parse(b.published_at ?? "") - Date.parse(a.published_at ?? ""))
-      .map((release) => releaseDisplayName(release.tag_name));
-    await setState(env.DB, "github:release-versions", JSON.stringify({ at: Date.now(), versions }));
-    await setState(env.DB, "github:releases-refreshed", "1");
-    return versions;
-  } catch (error) {
-    console.error("Release lookup failed", error);
-    return cached?.versions ?? [];
-  }
+  return (await reportReleases(env)).map((release) => release.version);
 }
 
 export function reporterFor(user: DraftUser, source: "discord" | "website"): Reporter {
@@ -177,6 +140,8 @@ export async function fileReport(
     throw new Error("This report is already being filed.");
   }
   try {
+    const release = await requireSupportedVersion(env, draft.values.version ?? "");
+    draft.values.version = release.version;
     const github = new GitHub(env);
     const reporter = reporterFor(draft.user, draft.source);
     const values = draft.values;
@@ -195,6 +160,7 @@ export async function fileReport(
     record.reporter = reporter;
     record.kind = draft.kind;
     await saveIssue(env.DB, record);
+    await setState(env.DB, `report:release:${record.number}`, JSON.stringify(release));
     await addEvent(env.DB, record.number, "created", { status: "new", source: draft.source });
     await addSubscriber(env.DB, record.number, draft.user.id, "reporter");
     await env.DB.prepare("UPDATE drafts SET issue_number=? WHERE id=?")

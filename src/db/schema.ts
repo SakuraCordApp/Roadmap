@@ -151,6 +151,18 @@ const MIGRATIONS: string[][] = [
     )`,
   ],
   [`ALTER TABLE jobs ADD COLUMN wake_after TEXT`],
+  [
+    `CREATE VIRTUAL TABLE IF NOT EXISTS issue_search USING fts5(title,summary,body,content='issues',content_rowid='number')`,
+    `CREATE TRIGGER IF NOT EXISTS issue_search_insert AFTER INSERT ON issues BEGIN
+      INSERT INTO issue_search(rowid,title,summary,body) VALUES(new.number,new.title,new.summary,new.body); END`,
+    `CREATE TRIGGER IF NOT EXISTS issue_search_delete AFTER DELETE ON issues BEGIN
+      INSERT INTO issue_search(issue_search,rowid,title,summary,body) VALUES('delete',old.number,old.title,old.summary,old.body); END`,
+    `CREATE TRIGGER IF NOT EXISTS issue_search_update AFTER UPDATE OF title,summary,body ON issues
+      WHEN old.title IS NOT new.title OR old.summary IS NOT new.summary OR old.body IS NOT new.body BEGIN
+      INSERT INTO issue_search(issue_search,rowid,title,summary,body) VALUES('delete',old.number,old.title,old.summary,old.body);
+      INSERT INTO issue_search(rowid,title,summary,body) VALUES(new.number,new.title,new.summary,new.body); END`,
+    `INSERT INTO issue_search(issue_search) VALUES('rebuild')`,
+  ],
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

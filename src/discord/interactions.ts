@@ -139,7 +139,12 @@ async function handleCommand(interaction: Interaction, env: Env) {
   const name = interaction.data?.name;
   if (name === "bug" || name === "suggest") {
     const kind: IssueKind = name === "bug" ? "bug" : "feature";
-    return json(reportModal(kind, 1, `m1:${kind}`, {}, await cachedVersionOptions(env)));
+    const versions = await cachedVersionOptions(env);
+    if (!versions.length)
+      return ephemeral(
+        "Latest release choices are loading. Please use https://sakuracord.app/report or try again shortly.",
+      );
+    return json(reportModal(kind, 1, `m1:${kind}`, {}, versions));
   }
   if (name === "roadmap") {
     return ephemeral(
@@ -159,7 +164,12 @@ async function handleComponent(interaction: Interaction, env: Env, later: Later)
 
   if (customId === "r:bug" || customId === "r:feature") {
     const kind = customId === "r:bug" ? "bug" : "feature";
-    return json(reportModal(kind, 1, `m1:${kind}`, {}, await cachedVersionOptions(env)));
+    const versions = await cachedVersionOptions(env);
+    if (!versions.length)
+      return ephemeral(
+        "Latest release choices are loading. Please use https://sakuracord.app/report or try again shortly.",
+      );
+    return json(reportModal(kind, 1, `m1:${kind}`, {}, versions));
   }
 
   if (customId === "roadmap:subscribe") {
@@ -369,7 +379,7 @@ function similarPrompt(draftId: string, kind: IssueKind, similar: SimilarReport[
         components: [
           {
             type: 10,
-            content: `**[#${report.number} · ${escapeDiscord(truncate(report.title, 90))}](${report.threadUrl ?? report.url})**\n-# ${report.statusLabel}${report.votes ? ` · 👍 ${report.votes}` : ""}`,
+            content: `**[#${report.number} · ${escapeDiscord(truncate(report.title, 90))}](${report.threadUrl ?? report.url})**\n-# ${report.statusLabel}${report.votes ? ` · 👍 ${report.votes}` : ""}${report.resolution ? `\n${report.resolution}` : ""}`,
           },
         ],
         accessory: report.open

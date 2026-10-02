@@ -159,9 +159,13 @@ function agentSummary(body: string): string {
   const locations = body.match(/###\s*Likely locations?\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
   const questions = body.match(/###\s*Questions\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
   const duplicate = body.match(/###\s*Possible duplicate\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]?.trim();
+  const availability = body
+    .match(/###\s*Fix availability\s*\n+([\s\S]*?)(?:\n###|$)/i)?.[1]
+    ?.trim();
   return (
     [
       summary,
+      availability,
       questions ? `**Questions**\n${questions}` : null,
       duplicate,
       locations ? `**Likely location**\n${locations}` : null,
