@@ -102,7 +102,17 @@ export async function findSimilar(env: Env, text: string, limit = 3): Promise<Si
   return results;
 }
 
-/** Version choices for the report form, newest first. */
+/** Cached version choices only — safe inside Discord's 3-second interaction window. */
+export async function cachedVersionOptions(env: Env): Promise<string[]> {
+  const cached = await getJsonState<{ at: number; versions: string[] } | null>(
+    env.DB,
+    "github:release-versions",
+    null,
+  );
+  return cached?.versions ?? [];
+}
+
+/** Version choices for the report form, newest first (refreshes from GitHub when stale). */
 export async function versionOptions(env: Env): Promise<string[]> {
   const cached = await getJsonState<{ at: number; versions: string[] } | null>(
     env.DB,

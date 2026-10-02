@@ -20,6 +20,7 @@ import {
 } from "./jobs/queue";
 import { publishRoadmap } from "./roadmap";
 import { rpc } from "./rpc";
+import { versionOptions } from "./reports";
 import {
   handleRelease,
   reconcile,
@@ -150,6 +151,9 @@ export default class Hub extends WorkerEntrypoint<Env> {
     if (env.DISCORD_BOT_TOKEN) await step("poll Discord", () => pollDiscordThreads(env));
     if (minute % 10 === 0 && env.GITHUB_APP_ID) {
       await step("reconcile", () => enqueue(env, "reconcile", "incremental", {}));
+    }
+    if (minute === 7 || (await getState(env.DB, "github:releases-refreshed")) === "0") {
+      if (env.GITHUB_APP_ID) await step("versions", () => versionOptions(env));
     }
     if (minute === 7) {
       await step("cleanup", () => cleanupJobs(env));

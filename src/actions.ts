@@ -270,13 +270,14 @@ export async function performAction(
   return message;
 }
 
+/** Open milestones from the synced cache (fast enough for Discord's 3-second window). */
 export async function openMilestones(env: Env): Promise<GhMilestone[]> {
-  const github = new GitHub(env);
-  const milestones = await github.request<GhMilestone[]>(
-    "GET",
-    github.repo("/milestones?state=open&sort=due_on&per_page=25"),
-  );
-  return milestones.sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
+  const { results } = await env.DB.prepare(
+    "SELECT number,title,description FROM milestones WHERE state='open'",
+  ).all<{ number: number; title: string; description: string }>();
+  return results
+    .map((row) => ({ ...row, state: "open" }) as unknown as GhMilestone)
+    .sort((a, b) => a.title.localeCompare(b.title, undefined, { numeric: true }));
 }
 
 export async function issueExists(env: Env, number: number) {

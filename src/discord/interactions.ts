@@ -18,7 +18,7 @@ import {
   downloadAttachments,
   fileReport,
   findSimilar,
-  versionOptions,
+  cachedVersionOptions,
   type FiledReport,
   type SimilarReport,
 } from "../reports";
@@ -139,7 +139,7 @@ async function handleCommand(interaction: Interaction, env: Env) {
   const name = interaction.data?.name;
   if (name === "bug" || name === "suggest") {
     const kind: IssueKind = name === "bug" ? "bug" : "feature";
-    return json(reportModal(kind, 1, `m1:${kind}`, {}, await versionOptions(env)));
+    return json(reportModal(kind, 1, `m1:${kind}`, {}, await cachedVersionOptions(env)));
   }
   if (name === "roadmap") {
     return ephemeral(
@@ -159,7 +159,7 @@ async function handleComponent(interaction: Interaction, env: Env, later: Later)
 
   if (customId === "r:bug" || customId === "r:feature") {
     const kind = customId === "r:bug" ? "bug" : "feature";
-    return json(reportModal(kind, 1, `m1:${kind}`, {}, await versionOptions(env)));
+    return json(reportModal(kind, 1, `m1:${kind}`, {}, await cachedVersionOptions(env)));
   }
 
   if (customId === "roadmap:subscribe") {
@@ -475,7 +475,7 @@ async function handleDraftComponent(
   }
   if (action === "details") {
     return json(
-      reportModal(draft.kind, 2, `m2:${draft.id}`, draft.values, await versionOptions(env)),
+      reportModal(draft.kind, 2, `m2:${draft.id}`, draft.values, await cachedVersionOptions(env)),
     );
   }
   if (action === "same") {
