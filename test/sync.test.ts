@@ -31,7 +31,7 @@ describe("milestones", () => {
       { text: "Smarter notifications", issues: [] },
     ]);
   });
-  it("shows the latest shipped version and all open ones", () => {
+  it("shows only open milestones", () => {
     const make = (version: string, state: "open" | "closed") => ({
       number: 1,
       version,
@@ -50,8 +50,10 @@ describe("milestones", () => {
         make("0.1.4", "closed"),
         make("0.1.5", "closed"),
         make("0.1.6", "open"),
+        make("0.1.7", "open"),
       ]).map((v) => v.version),
-    ).toEqual(["0.1.5", "0.1.6"]);
+    ).toEqual(["0.1.6", "0.1.7"]);
+    expect(visibleVersions([make("0.1.5", "closed")])).toEqual([]);
   });
 });
 

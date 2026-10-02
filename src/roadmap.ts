@@ -100,12 +100,9 @@ export async function loadVersions(db: D1Database): Promise<ParsedVersion[]> {
   return results.map(parseMilestone).sort((a, b) => compareVersions(a.version, b.version));
 }
 
-/** The latest shipped version plus every open (upcoming) version. */
+/** Only open (upcoming) milestones belong on the roadmap. */
 export function visibleVersions(versions: ParsedVersion[]): ParsedVersion[] {
-  const open = versions.filter((version) => version.state === "open");
-  const closed = versions.filter((version) => version.state === "closed");
-  const latest = closed.sort((a, b) => compareVersions(b.version, a.version))[0];
-  return [...(latest ? [latest] : []), ...open];
+  return versions.filter((version) => version.state === "open");
 }
 
 async function roadmapEmoji(env: Env): Promise<{ dot?: string; line?: string }> {
