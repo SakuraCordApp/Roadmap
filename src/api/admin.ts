@@ -269,6 +269,28 @@ admin.post("/migrate/adopt/:number", async (c) => {
   return c.json({ queued: true, known: Boolean(await getIssue(c.env.DB, number)) });
 });
 
+/** Remove a verification issue's Discord posts and hub records (the GitHub issue is deleted separately). */
+admin.post("/test/remove/:number", async (c) => {
+  const number = Number(c.req.param("number"));
+  const discord = discordClient(c.env);
+  const { results } = await c.env.DB.prepare("SELECT thread_id FROM threads WHERE issue_number=?")
+    .bind(number)
+    .all<{ thread_id: string }>();
+  for (const row of results)
+    await discord.delete(`/channels/${row.thread_id}`).catch(() => undefined);
+  await c.env.DB.batch(
+    [
+      "issues WHERE number",
+      "threads WHERE issue_number",
+      "subscribers WHERE issue_number",
+      "events WHERE issue_number",
+      "comment_links WHERE issue_number",
+    ].map((target) => c.env.DB.prepare(`DELETE FROM ${target}=?`).bind(number)),
+  );
+  await c.env.VECTORIZE.deleteByIds([String(number)]).catch(() => undefined);
+  return c.json({ removed: true, threads: results.length });
+});
+
 admin.onError((error, c) => {
   const status = error instanceof HttpError ? error.status : 500;
   return c.json({ error: error.message }, status as 500);
