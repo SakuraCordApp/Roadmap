@@ -11,6 +11,7 @@ import {
   type IssueRecord,
   type ThreadRecord,
 } from "../db/store";
+import { enqueue } from "../jobs/queue";
 import type { Env } from "../env";
 import { sha256 } from "../util/crypto";
 import { nowIso, truncate } from "../util/text";
@@ -183,15 +184,32 @@ export async function projectIssue(
     primary.cardHash !== cardHash ||
     statusChanged ||
     !primary.cardMessageId;
-  if (!needsWork) return { created };
+  if (!needsWork) {
+    for (const merged of (await threadsForIssue(env.DB, issue.number)).filter(
+      (t) => t.role === "merged",
+    )) {
+      await projectMergedThread(env, merged, issue);
+    }
+    return { created };
+  }
 
   // Discord rejects edits inside archived threads, so open the thread first and
   // archive it again at the end when the issue is closed.
-  await discord.patch(
-    `/channels/${primary.threadId}`,
-    { archived: false, locked: false, name: desiredState.name, applied_tags: tags },
-    { reason: `Sync SakuraCord issue #${issue.number}` },
-  );
+  try {
+    await discord.patch(
+      `/channels/${primary.threadId}`,
+      { archived: false, locked: false, name: desiredState.name, applied_tags: tags },
+      { reason: `Sync SakuraCord issue #${issue.number}` },
+    );
+  } catch (error) {
+    // The post was deleted in Discord; forget it rather than retrying forever.
+    if (!(error instanceof DiscordError) || error.code !== 10003) throw error;
+    await forgetThread(env, primary.threadId);
+    if (input.createIfMissing && !closed) {
+      await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
+    }
+    return { created };
+  }
   if (!primary.cardMessageId && !closed) {
     // Threads that predate the hub get the card as a new message.
     const posted = await discord.post<{ id: string }>(`/channels/${primary.threadId}/messages`, {
@@ -254,17 +272,27 @@ async function announceStatus(
   );
 }
 
+async function forgetThread(env: Env, threadId: string) {
+  await env.DB.prepare("DELETE FROM threads WHERE thread_id=?").bind(threadId).run();
+}
+
 async function projectMergedThread(env: Env, thread: ThreadRecord, issue: IssueRecord) {
   const forum = (await getJsonState<ForumTagMap>(env.DB, TAG_STATE_KEY, {}))[thread.forumId];
   const tags = forum?.status.duplicate ? [forum.status.duplicate] : [];
   const stateHash = await sha256(JSON.stringify({ merged: issue.number, tags }));
   if (thread.stateHash === stateHash) return;
   const discord = discordClient(env);
-  await discord.patch(`/channels/${thread.threadId}`, {
-    archived: false,
-    locked: false,
-    applied_tags: tags,
-  });
+  try {
+    await discord.patch(`/channels/${thread.threadId}`, {
+      archived: false,
+      locked: false,
+      applied_tags: tags,
+    });
+  } catch (error) {
+    if (!(error instanceof DiscordError) || error.code !== 10003) throw error;
+    await forgetThread(env, thread.threadId);
+    return;
+  }
   const primary = await primaryThread(env.DB, issue.number);
   await discord.post(
     `/channels/${thread.threadId}/messages`,

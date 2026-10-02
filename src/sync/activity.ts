@@ -299,6 +299,7 @@ export async function syncMilestones(env: Env): Promise<void> {
     );
   }
   await env.DB.batch(statements);
+  await setState(env.DB, "github:milestones-refreshed", new Date().toISOString());
   await enqueue(env, "roadmap", "publish", {}, 2);
 }
 
@@ -325,7 +326,14 @@ export async function reconcile(env: Env, payload: { full?: boolean } = {}): Pro
     })),
   );
   await setState(env.DB, "github:reconciled-at", new Date(startedAt - 120_000).toISOString());
-  await enqueue(env, "milestones", "all", {});
+  const milestonesRefreshed = await getState(env.DB, "github:milestones-refreshed");
+  if (
+    payload.full ||
+    !milestonesRefreshed ||
+    Date.now() - Date.parse(milestonesRefreshed) >= 3600_000
+  ) {
+    await enqueue(env, "milestones", "all", {});
+  }
 }
 
 export const REPOSITORY_ISSUES_URL = `${REPOSITORY_URL}/issues`;

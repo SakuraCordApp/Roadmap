@@ -16,7 +16,7 @@ import {
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
 import type { GhIssue, GhMilestone } from "../github/types";
-import { enqueue, jobStats, type JobKind } from "../jobs/queue";
+import { enqueue, jobStats, runNextDueJob, type JobKind } from "../jobs/queue";
 import { setupDiscord, checkBotPermissions } from "../setup/discord";
 import { discordClient } from "../discord/threads";
 import { setupGithub } from "../setup/github";
@@ -24,6 +24,8 @@ import { recordFromGithub } from "../sync/issue";
 import { constantTimeEqual } from "../util/crypto";
 import { HttpError } from "../util/http";
 import { nowIso } from "../util/text";
+
+import { handlers } from "../jobs/handlers";
 
 export const admin = new Hono<{ Bindings: Env }>();
 
@@ -99,6 +101,8 @@ admin.post("/jobs", async (c) => {
   await enqueue(c.env, body.kind as JobKind, body.key, body.payload);
   return c.json({ queued: true });
 });
+
+admin.post("/jobs/run", async (c) => c.json({ job: await runNextDueJob(c.env, handlers) }));
 
 admin.post("/reconcile", async (c) => {
   const body = (await c.req.json().catch(() => ({}))) as { full?: boolean };

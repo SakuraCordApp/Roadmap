@@ -105,6 +105,7 @@ Admin endpoints take `Authorization: Bearer $ROADMAP_ADMIN_TOKEN` (Keychain
 | `POST /admin/setup/github`       | Create/update labels                                                                                          |
 | `POST /admin/setup/discord`      | Forum tags, posting lock, guide posts, webhooks, commands (body: `{"emojis": <npm run tag-icons -- --json>}`) |
 | `POST /admin/reconcile`          | Resync from GitHub (`{"full": true}` for everything)                                                          |
+| `POST /admin/jobs/run`           | Run one due D1 job for recovery; safe alongside the queue consumer                                            |
 | `POST /admin/reindex`            | Rebuild duplicate-search embeddings                                                                           |
 | `POST /admin/retriage/:number`   | Run AI triage again                                                                                           |
 
@@ -121,6 +122,53 @@ on `main`.
 Everything runs on free tiers: Workers, D1, Queues, Vectorize, and Workers AI
 on Cloudflare, plus GitHub Actions for the public repository. The only paid
 part is OpenAI API usage: GPT-6 Luna for triage, investigation, and fixes.
+
+## Free-tier capacity and recovery
+
+The intended workload is fewer than five reports per day. Quotas are shared
+with the account's other Workers; they are not dedicated to this hub.
+
+- [Queues](https://developers.cloudflare.com/queues/platform/pricing/): 10,000
+  operations/day, normally three per delivered message (write, read, delete).
+  Batching does **not** reduce billable operations. Pending jobs share one
+  notification for 15 minutes, so cron and repeated webhooks cannot flood the
+  queue while its consumer is busy. A lost notification is retried after that
+  lease; an execution is claimed atomically in D1.
+- Quiet-day maintenance is at most roughly 650 queue operations: 144 issue
+  reconciliations, 24 milestone refreshes and up to 48 roadmap jobs. Milestone
+  webhooks still trigger immediate refreshes. Five reports, modest discussion
+  and normal retries should fit around 1,000–2,000 operations/day; this is a
+  workload estimate, not a measured guarantee. Each recently active Discord
+  thread can add about 90 operations during its 30-minute edit/deletion watch.
+- [D1](https://developers.cloudflare.com/d1/platform/pricing/): 5 million rows
+  read and 100,000 written/day. At about 200 linked threads, the once-per-minute
+  cursor scan reads roughly 288,000 rows/day, before other work and site traffic.
+  Bulk inserts use at most 96 bound parameters, below D1's 100-parameter limit.
+- [Vectorize](https://developers.cloudflare.com/vectorize/platform/pricing/):
+  5 million stored dimensions and 30 million queried dimensions/month. The
+  1,024-dimensional model allows about 4,882 stored reports. About 200 reports
+  use 205,000 stored dimensions. Revisit retention or embedding dimensions as
+  the issue archive approaches that ceiling.
+- [Workers AI](https://developers.cloudflare.com/workers-ai/platform/pricing/):
+  10,000 neurons/day. bge-m3 embeddings cost 1,075 neurons per million input
+  tokens, so even 100,000 embedding tokens/day use about 108 neurons. Luna
+  triage and GitHub agents use the separately funded OpenAI API.
+- Workers also have per-invocation CPU and subrequest limits, and an account
+  request allowance. A low report count alone does not bound public website
+  traffic, discussion volume, or usage by other projects.
+
+If Queue sends fail, committed work remains pending in D1 and accepted
+webhooks do not fail merely because their notification could not be sent.
+Daily quota exhaustion suspends further notification attempts until 00:00 UTC.
+Cron alternates between polling for new activity and running one pending job
+without a Queue message (up to 720 recovery jobs/day). Synchronization is slower
+while degraded, but does not depend on a Mac or a paid plan. The authenticated
+`POST /admin/jobs/run` endpoint can drain one job per request after a burst.
+`GET /admin/status` exposes `queuePausedUntil`, pending work and recent errors.
+
+Queue messages expire after 24 hours on Free; the durable D1 job records do
+not. A D1 or Workers quota exhaustion is a separate limit and can still pause
+the system until reset. Inspect account-wide usage when activity grows.
 
 ## Development
 

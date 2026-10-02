@@ -208,7 +208,7 @@ export async function syncGithubComment(
 
   const body = comment.body.replace(/<!--[\s\S]*?-->/g, "").trim();
   const hash = await sha256(body);
-  if (link && link.contentHash === hash) return;
+  if (link && link.contentHash === hash && link.discordMessageId) return;
   const thread = await primaryThread(env.DB, issue.number);
   const linkId =
     link?.id ??

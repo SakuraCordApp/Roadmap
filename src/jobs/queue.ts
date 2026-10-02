@@ -1,3 +1,4 @@
+import { getState, setState } from "../db/store";
 import type { Env } from "../env";
 import { errorMessage } from "../util/http";
 import { nowIso } from "../util/text";
@@ -37,6 +38,52 @@ interface JobRow {
 export type JobHandler = (env: Env, payload: any) => Promise<void>;
 
 const MAX_ATTEMPTS = 8;
+const WAKE_LEASE_MS = 15 * 60_000;
+
+/** Lease notifications so cron and duplicate webhooks cannot flood the queue.
+ * D1 is durable: a failed notification must not fail an already-saved mutation.
+ */
+async function notifyJobs(env: Env, ids: number[], delaySeconds = 0): Promise<boolean> {
+  const pausedUntil = await getState(env.DB, "queue:paused-until");
+  if (pausedUntil && Date.parse(pausedUntil) > Date.now()) return false;
+  let available = true;
+  for (let start = 0; start < ids.length; start += 90) {
+    const chunk = ids.slice(start, start + 90);
+    const { results } = await env.DB.prepare(
+      `UPDATE jobs SET wake_after=? WHERE id IN (${chunk.map(() => "?").join(",")})
+       AND status='pending' AND (wake_after IS NULL OR wake_after<=?) RETURNING id`,
+    )
+      .bind(
+        new Date(Date.now() + delaySeconds * 1000 + WAKE_LEASE_MS).toISOString(),
+        ...chunk,
+        nowIso(),
+      )
+      .all<{ id: number }>();
+    if (!results.length) continue;
+    try {
+      await env.JOBS.sendBatch(
+        results.map(({ id }) => ({
+          body: { id } satisfies JobMessage,
+          ...(delaySeconds > 0 ? { delaySeconds: Math.min(delaySeconds, 43_200) } : {}),
+        })),
+      );
+    } catch (error) {
+      available = false;
+      console.error("Queue notification unavailable; jobs remain in D1", errorMessage(error));
+      if (/10253|daily.*limit/i.test(errorMessage(error))) {
+        const reset = new Date();
+        reset.setUTCHours(24, 0, 0, 0);
+        await setState(env.DB, "queue:paused-until", reset.toISOString());
+      }
+      await env.DB.prepare(
+        `UPDATE jobs SET wake_after=NULL WHERE id IN (${results.map(() => "?").join(",")})`,
+      )
+        .bind(...results.map(({ id }) => id))
+        .run();
+    }
+  }
+  return available;
+}
 
 export async function enqueue(
   env: Env,
@@ -63,13 +110,11 @@ export async function enqueue(
     .bind(`${kind}:${key}`, kind, JSON.stringify(payload), runAfter, now, now)
     .first<{ id: number; status: string }>();
   if (row && row.status === "pending") {
-    await env.JOBS.send({ id: row.id } satisfies JobMessage, {
-      ...(delaySeconds > 0 ? { delaySeconds: Math.min(delaySeconds, 43_200) } : {}),
-    });
+    await notifyJobs(env, [row.id], delaySeconds);
   }
 }
 
-/** Enqueue many jobs with one D1 statement per 40 jobs and one queue batch. */
+/** Enqueue many jobs with at most 96 bound parameters per insert and leased queue notifications. */
 export async function enqueueMany(
   env: Env,
   jobs: Array<{ kind: JobKind; key: string; payload?: Record<string, unknown> }>,
@@ -78,8 +123,8 @@ export async function enqueueMany(
   const now = nowIso();
   const runAfter = new Date(Date.now() + delaySeconds * 1000).toISOString();
   const ids: number[] = [];
-  for (let start = 0; start < jobs.length; start += 40) {
-    const chunk = jobs.slice(start, start + 40);
+  for (let start = 0; start < jobs.length; start += 16) {
+    const chunk = jobs.slice(start, start + 16);
     const values = chunk.map(() => "(?,?,?,'pending',?,?,?)").join(",");
     const bindings = chunk.flatMap((job) => [
       `${job.kind}:${job.key}`,
@@ -105,14 +150,7 @@ export async function enqueueMany(
       .all<{ id: number; status: string }>();
     ids.push(...results.filter((row) => row.status === "pending").map((row) => row.id));
   }
-  for (let start = 0; start < ids.length; start += 100) {
-    await env.JOBS.sendBatch(
-      ids.slice(start, start + 100).map((id) => ({
-        body: { id } satisfies JobMessage,
-        ...(delaySeconds > 0 ? { delaySeconds: Math.min(delaySeconds, 43_200) } : {}),
-      })),
-    );
-  }
+  await notifyJobs(env, ids, delaySeconds);
   return ids.length;
 }
 
@@ -134,20 +172,20 @@ export async function runJob(
     await handlers[claimed.kind](env, JSON.parse(claimed.payload_json));
     const finished = await env.DB.prepare(
       `UPDATE jobs SET status=CASE WHEN rerun=1 THEN 'pending' ELSE 'done' END,
-         rerun=0,locked_at=NULL,last_error=NULL,attempts=CASE WHEN rerun=1 THEN 0 ELSE attempts END,
+         rerun=0,locked_at=NULL,wake_after=NULL,last_error=NULL,attempts=CASE WHEN rerun=1 THEN 0 ELSE attempts END,
          updated_at=?
        WHERE id=? RETURNING status`,
     )
       .bind(nowIso(), id)
       .first<{ status: string }>();
-    if (finished?.status === "pending") await env.JOBS.send({ id } satisfies JobMessage);
+    if (finished?.status === "pending") await notifyJobs(env, [id]);
   } catch (error) {
     const attempts = claimed.attempts;
     const failed = attempts >= MAX_ATTEMPTS;
     const delay = Math.min(30 * 2 ** attempts, 3600);
     console.error(`Job ${claimed.key} failed (attempt ${attempts})`, errorMessage(error));
     await env.DB.prepare(
-      `UPDATE jobs SET status=?,locked_at=NULL,last_error=?,run_after=?,updated_at=? WHERE id=?`,
+      `UPDATE jobs SET status=?,locked_at=NULL,wake_after=NULL,last_error=?,run_after=?,updated_at=? WHERE id=?`,
     )
       .bind(
         failed ? "failed" : "pending",
@@ -161,19 +199,39 @@ export async function runJob(
 }
 
 /** Cron safety net: wake jobs whose queue message was lost or delayed. */
-export async function wakeDueJobs(env: Env): Promise<number> {
-  const { results } = await env.DB.prepare(
-    `SELECT id FROM jobs
-     WHERE (status='pending' AND run_after<=?)
-        OR (status='running' AND locked_at < ?)
-     ORDER BY run_after LIMIT 50`,
+export async function wakeDueJobs(env: Env): Promise<boolean> {
+  // Recover expired execution leases before claiming notification leases.
+  await env.DB.prepare(
+    `UPDATE jobs SET status='pending',locked_at=NULL,wake_after=NULL
+     WHERE status='running' AND locked_at<?`,
   )
-    .bind(nowIso(), new Date(Date.now() - 15 * 60_000).toISOString())
+    .bind(new Date(Date.now() - WAKE_LEASE_MS).toISOString())
+    .run();
+  const { results } = await env.DB.prepare(
+    `SELECT id FROM jobs WHERE status='pending' AND run_after<=?
+     AND (wake_after IS NULL OR wake_after<=?) ORDER BY run_after LIMIT 50`,
+  )
+    .bind(nowIso(), nowIso())
     .all<{ id: number }>();
-  if (results.length) {
-    await env.JOBS.sendBatch(results.map((row) => ({ body: { id: row.id } satisfies JobMessage })));
-  }
-  return results.length;
+  return notifyJobs(
+    env,
+    results.map(({ id }) => id),
+  );
+}
+
+/** One bounded recovery invocation; the atomic claim also protects against queue delivery. */
+export async function runNextDueJob(env: Env, handlers: Record<JobKind, JobHandler>) {
+  const row = await env.DB.prepare(
+    `SELECT id,key FROM jobs WHERE (status='pending' AND run_after<=?)
+     OR (status='running' AND locked_at<?) ORDER BY run_after LIMIT 1`,
+  )
+    .bind(nowIso(), new Date(Date.now() - WAKE_LEASE_MS).toISOString())
+    .first<{ id: number; key: string }>();
+  if (!row) return null;
+  await runJob(env, row.id, handlers);
+  return env.DB.prepare("SELECT key,status,last_error FROM jobs WHERE id=?")
+    .bind(row.id)
+    .first<{ key: string; status: string; last_error: string | null }>();
 }
 
 export async function jobStats(env: Env) {
@@ -184,7 +242,7 @@ export async function jobStats(env: Env) {
     `SELECT key,attempts,last_error,updated_at FROM jobs
      WHERE last_error IS NOT NULL ORDER BY updated_at DESC LIMIT 20`,
   ).all();
-  return { counts, failures };
+  return { counts, failures, queuePausedUntil: await getState(env.DB, "queue:paused-until") };
 }
 
 export async function cleanupJobs(env: Env): Promise<void> {

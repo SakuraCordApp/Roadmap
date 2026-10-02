@@ -7,48 +7,20 @@ import { ensureSchema } from "./db/schema";
 import { getState, setState } from "./db/store";
 import { handleInteraction } from "./discord/interactions";
 import type { Env } from "./env";
-import { deliverFeed } from "./github/feed";
 import { handleGithubWebhook } from "./github/webhook";
 import {
   cleanupJobs,
   enqueue,
   runJob,
   wakeDueJobs,
-  type JobHandler,
-  type JobKind,
+  runNextDueJob,
   type JobMessage,
 } from "./jobs/queue";
-import { publishRoadmap } from "./roadmap";
 import { rpc } from "./rpc";
 import { versionOptions } from "./reports";
-import {
-  handleRelease,
-  reconcile,
-  shipIssue,
-  syncMilestones,
-  syncPull,
-  syncPush,
-} from "./sync/activity";
-import { pollDiscordThreads, syncDiscordThread, syncGithubComment } from "./sync/comments";
-import { embedIssue, syncIssue } from "./sync/issue";
-import { runTriage } from "./sync/triage";
+import { pollDiscordThreads } from "./sync/comments";
+import { handlers } from "./jobs/handlers";
 import { errorMessage, HttpError } from "./util/http";
-
-const handlers: Record<JobKind, JobHandler> = {
-  "sync-issue": syncIssue,
-  triage: runTriage,
-  embed: embedIssue,
-  comment: syncGithubComment,
-  "discord-thread": syncDiscordThread,
-  pull: syncPull,
-  push: syncPush,
-  release: handleRelease,
-  ship: shipIssue,
-  milestones: (env) => syncMilestones(env),
-  roadmap: publishRoadmap,
-  feed: deliverFeed,
-  reconcile,
-};
 
 const app = new Hono<{ Bindings: Env }>();
 
@@ -147,9 +119,15 @@ export default class Hub extends WorkerEntrypoint<Env> {
         console.error(`${name} failed`, errorMessage(error));
       }
     };
-    await step("wake jobs", () => wakeDueJobs(env));
+    if (!(await wakeDueJobs(env)) && minute % 2 === 0) {
+      // Keep making progress on the free plan even when Queue operations are exhausted.
+      // Alternate recovery and polling so new Discord replies still enter D1.
+      // One job gets its own invocation's subrequest budget.
+      await runNextDueJob(env, handlers);
+      return;
+    }
     if (env.DISCORD_BOT_TOKEN) await step("poll Discord", () => pollDiscordThreads(env));
-    if (minute % 10 === 0 && env.GITHUB_APP_ID) {
+    if (minute % 10 === 1 && env.GITHUB_APP_ID) {
       await step("reconcile", () => enqueue(env, "reconcile", "incremental", {}));
     }
     if (minute === 7 || (await getState(env.DB, "github:releases-refreshed")) === "0") {

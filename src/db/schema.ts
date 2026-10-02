@@ -150,6 +150,7 @@ const MIGRATIONS: string[][] = [
       expires_at TEXT NOT NULL
     )`,
   ],
+  [`ALTER TABLE jobs ADD COLUMN wake_after TEXT`],
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
