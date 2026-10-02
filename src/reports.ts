@@ -89,9 +89,9 @@ export async function findSimilar(env: Env, text: string, limit = 3): Promise<Si
       resolution: issue.shippedStableIn
         ? `Available in regular release ${issue.shippedStableIn}.`
         : issue.shippedIn
-          ? `Available in nightly ${issue.shippedIn}; not yet in a regular release.`
+          ? `Recorded in release ${issue.shippedIn}.`
           : issue.fixes.some((fix) => fix.state === "merged")
-            ? "A fix is in the code but has not shipped in a release yet."
+            ? "A fix is merged; release availability has not been confirmed yet."
             : null,
       url: issueUrl(issue.number),
       trackerUrl: trackerUrl(env.WEBSITE_URL, issue.number),
