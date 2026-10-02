@@ -17,7 +17,7 @@ import { enqueue } from "../jobs/queue";
 import type { Env } from "../env";
 import { sha256 } from "../util/crypto";
 import { nowIso, truncate } from "../util/text";
-import { issueCard, PING_VOTERS, statusMessageText, threadUrl } from "./cards";
+import { issueCard, PING_SUBSCRIBERS, statusMessageText, threadUrl } from "./cards";
 import { Discord, DiscordError, mentionUsers, noMentions, type UploadFile } from "./rest";
 
 export interface ForumTagMap {
@@ -278,10 +278,9 @@ async function announceStatus(
     duplicateThreadId = (await primaryThread(env.DB, issue.duplicateOf))?.threadId ?? null;
   }
   const text = statusMessageText({ issue, previous, note, duplicateThreadId });
-  const people = await subscribers(env.DB, issue.number);
-  const reporter = people.filter((person) => person.kind === "reporter").map((p) => p.userId);
-  const pinged = PING_VOTERS.has(issue.status) ? people.map((person) => person.userId) : reporter;
-  const mentions = pinged.slice(0, 50);
+  const mentions = PING_SUBSCRIBERS.has(issue.status)
+    ? (await subscribers(env.DB, issue.number)).map((person) => person.userId).slice(0, 50)
+    : [];
   const content = mentions.length
     ? `${text}\n-# ${mentions.map((id) => `<@${id}>`).join(" ")}`
     : text;

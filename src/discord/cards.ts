@@ -279,14 +279,8 @@ export function statusMessageText(input: StatusMessageInput): string {
   return text;
 }
 
-/** Statuses whose announcement also pings everyone who voted, not just the reporter. */
-export const PING_VOTERS: ReadonlySet<StatusId> = new Set([
-  "in_nightly",
-  "shipped",
-  "duplicate",
-  "declined",
-  "cant_reproduce",
-]);
+/** Only completed reports ping their subscribers. */
+export const PING_SUBSCRIBERS: ReadonlySet<StatusId> = new Set(["shipped", "done"]);
 
 export function guidePost(kind: IssueKind, websiteUrl: string) {
   const bug = kind === "bug";
@@ -298,7 +292,7 @@ export function guidePost(kind: IssueKind, websiteUrl: string) {
         "**How it works**",
         "1. Fill in a short form: what happened, how bad it is, and your SakuraCord version.",
         "2. We check for similar reports first, so you can add yourself to an existing one instead of filing a duplicate.",
-        "3. Your report gets its own post here and a GitHub issue. You'll be pinged when it's confirmed, fixed in nightly, and shipped.",
+        "3. Your report gets its own post here and a GitHub issue. You'll be pinged when it's completed.",
         "",
         "-# Already reported? Press 👍 **Me too** on the report to follow it and help us prioritize.",
       ]
@@ -309,7 +303,7 @@ export function guidePost(kind: IssueKind, websiteUrl: string) {
         "**How it works**",
         "1. Describe what you'd like and why it matters to you.",
         "2. We show similar suggestions first, so you can vote for an existing one instead of starting a new post.",
-        "3. Each suggestion gets its own post here and a GitHub issue. You'll be pinged when it's planned and shipped.",
+        "3. Each suggestion gets its own post here and a GitHub issue. You'll be pinged when it's completed.",
         "",
         "-# Votes matter: press 👍 **Me too** on suggestions you want.",
       ];

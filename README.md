@@ -55,9 +55,9 @@ minutes). Every GitHub comment appears in the Discord post under the author's
 name through a channel webhook. Website comments go to both. Each copy carries
 an origin marker so nothing echoes.
 
-**Notifications.** Reporters are pinged on every status change; voters ("Me
-too") are also pinged when a report lands in nightly, ships, or closes.
-Releases ping again when a fix reaches the regular (non-beta) channel.
+**Notifications.** Report updates ping subscribers (reporters and "Me too"
+followers) only when the report is completed: Shipped or Done. Other status
+changes and later regular-release announcements are posted without pings.
 
 **AI pipeline.**
 

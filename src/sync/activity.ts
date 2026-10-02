@@ -15,11 +15,10 @@ import {
   patchIssue,
   primaryThread,
   setState,
-  subscribers,
   type FixRef,
   type IssueRecord,
 } from "../db/store";
-import { mentionUsers } from "../discord/rest";
+import { noMentions } from "../discord/rest";
 import { postInThread } from "../discord/threads";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
@@ -289,15 +288,12 @@ async function containsAnyFix(
 async function announceStableRelease(env: Env, issue: IssueRecord, version: string) {
   const thread = await primaryThread(env.DB, issue.number);
   if (!thread) return;
-  const people = (await subscribers(env.DB, issue.number))
-    .map((person) => person.userId)
-    .slice(0, 50);
   await postInThread(
     env,
     thread.threadId,
     {
-      content: `🌸 **Now in the regular release: SakuraCord ${version}.**${people.length ? `\n-# ${people.map((id) => `<@${id}>`).join(" ")}` : ""}`,
-      allowed_mentions: mentionUsers(people),
+      content: `🌸 **Now in the regular release: SakuraCord ${version}.**`,
+      allowed_mentions: noMentions,
       flags: 1 << 2,
     },
     { nonceKey: `stable:${issue.number}:${version}` },
