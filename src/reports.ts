@@ -73,12 +73,20 @@ export interface SimilarReport {
 
 export async function findSimilar(env: Env, text: string, limit = 3): Promise<SimilarReport[]> {
   if (text.trim().length < 8) return [];
-  const matches = await similarTo(env, text, { topK: 8, minScore: SIMILAR_THRESHOLD }).catch(
-    (error) => {
-      console.error("Similar report search failed", error);
-      return [];
-    },
-  );
+  // An exact title must not disappear because its short query scores below the
+  // threshold against a long report body. It also avoids an unnecessary AI call.
+  const title = text.trim().split("\n", 1)[0]!.trim();
+  const exact = await env.DB.prepare(
+    "SELECT number FROM issues WHERE lower(title)=lower(?) AND status!='duplicate' AND kind IS NOT NULL LIMIT ?",
+  )
+    .bind(title, limit)
+    .all<{ number: number }>();
+  const matches = exact.results.length
+    ? exact.results.map(({ number }) => ({ number, score: 1 }))
+    : await similarTo(env, text, { topK: 8, minScore: SIMILAR_THRESHOLD }).catch((error) => {
+        console.error("Similar report search failed", error);
+        return [];
+      });
   const results: SimilarReport[] = [];
   for (const match of matches) {
     const issue = await getIssue(env.DB, match.number);
