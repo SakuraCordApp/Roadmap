@@ -1,6 +1,7 @@
 import { DISCORD } from "../config";
 import { discordClient } from "../discord/threads";
 import type { Env } from "../env";
+import { enqueue } from "../jobs/queue";
 
 // GitHub activity cards for the Discord updates channel (formerly the separate
 // DiscordBot Worker). Bot-generated issue traffic is filtered out so issue sync
@@ -241,9 +242,16 @@ function renderDetail(event: string, payload: JsonObject, repositoryUrl: string)
   };
 }
 
-export async function deliverFeed(env: Env, payload: { delivery: string; updates: FeedUpdate[] }) {
+export async function deliverFeed(
+  env: Env,
+  payload: { delivery: string; updates: FeedUpdate[]; offset?: number },
+) {
   const discord = discordClient(env);
-  for (const [index, update] of payload.updates.entries()) {
+  const start = payload.offset ?? 0;
+  // Reserve room for Discord retries and the job runner's D1 requests.
+  const end = Math.min(start + 5, payload.updates.length);
+  for (let index = start; index < end; index++) {
+    const update = payload.updates[index]!;
     await discord.post(
       `/channels/${DISCORD.githubUpdatesChannelId}/messages`,
       {
@@ -266,6 +274,8 @@ export async function deliverFeed(env: Env, payload: { delivery: string; updates
       { nonceKey: `github:${payload.delivery}:${index}` },
     );
   }
+  if (end < payload.updates.length)
+    await enqueue(env, "feed", `${payload.delivery}:${end}`, { ...payload, offset: end });
 }
 
 function colorFor(event: string, payload: JsonObject): number {
