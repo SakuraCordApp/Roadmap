@@ -204,7 +204,11 @@ If Queue sends fail, committed work remains pending in D1 and accepted
 webhooks do not fail merely because their notification could not be sent.
 Daily quota exhaustion suspends further notification attempts until 00:00 UTC.
 Cron alternates between polling for new activity and running one pending job
-without a Queue message (up to 720 recovery jobs/day). Synchronization is slower
+without a Queue message (up to 720 recovery jobs/day). Report synchronization
+takes priority over background work. Manage actions directly await their report's
+sync through an internal Worker RPC before confirming success, even while Queues
+are paused. If sync fails, the action reports partial completion and the durable
+job retries it. Automatic synchronization is slower
 while degraded, but does not depend on a Mac or a paid plan. The authenticated
 `POST /admin/jobs/run` endpoint can drain one job per request after a burst.
 `GET /admin/status` exposes `queuePausedUntil`, pending work and recent errors.

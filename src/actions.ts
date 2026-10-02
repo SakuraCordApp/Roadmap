@@ -60,7 +60,7 @@ export function actionOptions(status: StatusId, kind: "bug" | "feature" | null):
       options.push({
         value: "needs_info",
         label: "Ask for more information",
-        description: "Ping the reporter with questions",
+        description: "Ask the reporter questions",
         emoji: "❓",
         input: {
           label: "What do you need to know?",

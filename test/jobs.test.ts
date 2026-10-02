@@ -6,6 +6,7 @@ import {
   enqueue,
   enqueueMany,
   runNextDueJob,
+  runJobByKey,
   wakeDueJobs,
   type JobHandler,
   type JobKind,
@@ -59,20 +60,29 @@ describe("durable job recovery", () => {
     expect(sqlite.prepare("SELECT COUNT(*) AS count FROM jobs").get()!.count).toBe(197);
   });
 
-  it("keeps work durable during quota exhaustion and runs it without the queue", async () => {
+  it("recovers report changes before older background work during quota exhaustion", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
     sendBatch.mockRejectedValueOnce(new Error("daily write operations limit (10253)"));
+    await enqueue(env, "embed", "50", { number: 50 });
+    vi.setSystemTime(Date.now() + 1000);
     await enqueue(env, "sync-issue", "51", { number: 51 });
     expect(row().status).toBe("pending");
     expect(row().attempts).toBe(0);
     expect(await wakeDueJobs(env)).toBe(false);
     expect(sendBatch).toHaveBeenCalledTimes(1);
     const handler = vi.fn(async () => {});
-    expect(await runNextDueJob(env, handlers(handler))).toMatchObject({
+    const recoveryHandlers = { ...handlers(handler), embed: handler };
+    expect(await runNextDueJob(env, recoveryHandlers)).toMatchObject({
+      key: "sync-issue:51",
       status: "done",
       last_error: null,
     });
     expect(handler).toHaveBeenCalledTimes(1);
-    expect(await runNextDueJob(env, handlers(handler))).toBeNull();
+    expect(await runNextDueJob(env, recoveryHandlers)).toMatchObject({
+      key: "embed:50",
+      status: "done",
+    });
+    expect(await runNextDueJob(env, recoveryHandlers)).toBeNull();
   });
 
   it("runs an event received during execution once more with the latest payload", async () => {
@@ -87,6 +97,22 @@ describe("durable job recovery", () => {
     await runNextDueJob(env, handlers(handler));
     expect(seen).toEqual([1, 2]);
     expect(row().status).toBe("done");
+  });
+
+  it("runs a selected report immediately while Queues are paused without repeating completion", async () => {
+    sendBatch.mockRejectedValueOnce(new Error("daily write operations limit (10253)"));
+    await enqueue(env, "sync-issue", "50", { number: 50 });
+    await enqueue(env, "sync-issue", "165", { number: 165 });
+    const handler = vi.fn(async () => {});
+    expect(await runJobByKey(env, "sync-issue:165", handlers(handler))).toMatchObject({
+      key: "sync-issue:165",
+      status: "done",
+    });
+    expect(handler).toHaveBeenCalledWith(env, { number: 165 });
+    expect(row().status).toBe("pending");
+    await runJobByKey(env, "sync-issue:165", handlers(handler));
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(sendBatch).toHaveBeenCalledTimes(1);
   });
 
   it("respects failure backoff and never claims a job that is already running", async () => {

@@ -12,6 +12,7 @@ import {
   cleanupJobs,
   enqueue,
   runJob,
+  runJobByKey,
   wakeDueJobs,
   runNextDueJob,
   type JobMessage,
@@ -111,6 +112,14 @@ app.onError((error, c) => {
   const status = error instanceof HttpError ? error.status : 500;
   return c.json({ error: status === 500 ? "Internal error" : error.message }, status as 500);
 });
+
+/** Internal loopback RPC: direct Manage updates get their own invocation budget. */
+export class ReportSync extends WorkerEntrypoint<Env> {
+  async run(number: number) {
+    await ensureSchema(this.env.DB);
+    return runJobByKey(this.env, `sync-issue:${number}`, handlers);
+  }
+}
 
 export default class Hub extends WorkerEntrypoint<Env> {
   override fetch(request: Request): Response | Promise<Response> {

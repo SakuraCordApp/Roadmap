@@ -120,10 +120,29 @@ export async function handleInteraction(
       }),
     );
 
+  const applyAction: typeof performAction = async (...args) => {
+    const message = await performAction(...args);
+    try {
+      // Await this report's sync directly, even when Queue delivery is paused.
+      // The RPC has its own invocation; GitHub mutation and projection do not
+      // consume a single invocation's entire Free-tier D1/subrequest budget.
+      for (let attempt = 0; attempt < 4; attempt++) {
+        const result = await ctx.exports.ReportSync.run(args[1]);
+        if (result?.status === "done") return message;
+        if (!result || result.last_error || result.status === "failed") break;
+        // A concurrent webhook may already own the same job's lease.
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      }
+    } catch (error) {
+      console.error("Immediate report sync failed", errorMessage(error));
+    }
+    throw new Error("Saved on GitHub, but Discord has not finished updating. A retry is saved.");
+  };
+
   try {
     if (interaction.type === 2) return await handleCommand(interaction, env);
-    if (interaction.type === 3) return await handleComponent(interaction, env, later);
-    if (interaction.type === 5) return await handleModal(interaction, env, later);
+    if (interaction.type === 3) return await handleComponent(interaction, env, later, applyAction);
+    if (interaction.type === 5) return await handleModal(interaction, env, later, applyAction);
   } catch (error) {
     console.error("Interaction failed", errorMessage(error));
     return ephemeral(`⚠️ ${truncate(errorMessage(error), 300)}`);
@@ -158,7 +177,12 @@ async function handleCommand(interaction: Interaction, env: Env) {
 // ---------------------------------------------------------------------------
 // Buttons and selects
 
-async function handleComponent(interaction: Interaction, env: Env, later: Later) {
+async function handleComponent(
+  interaction: Interaction,
+  env: Env,
+  later: Later,
+  applyAction: typeof performAction,
+) {
   const customId: string = interaction.data?.custom_id ?? "";
   const [scope, action, a, b] = customId.split(":");
   const discord = discordClient(env);
@@ -338,7 +362,7 @@ async function handleComponent(interaction: Interaction, env: Env, later: Later)
         });
       }
       later(async () => {
-        const message = await performAction(env, number, chosen, userOf(interaction).name);
+        const message = await applyAction(env, number, chosen, userOf(interaction).name);
         await discord.editInteractionResponse(interaction.token, {
           content: `✅ ${message}`,
           components: [],
@@ -351,7 +375,7 @@ async function handleComponent(interaction: Interaction, env: Env, later: Later)
         return ephemeral("Only SakuraCord maintainers can manage reports.");
       const milestone = Number(interaction.data.values?.[0]);
       later(async () => {
-        const message = await performAction(env, number, "plan", userOf(interaction).name, {
+        const message = await applyAction(env, number, "plan", userOf(interaction).name, {
           milestone,
         });
         await discord.editInteractionResponse(interaction.token, {
@@ -522,7 +546,12 @@ async function handleDraftComponent(
 // ---------------------------------------------------------------------------
 // Modals
 
-async function handleModal(interaction: Interaction, env: Env, later: Later) {
+async function handleModal(
+  interaction: Interaction,
+  env: Env,
+  later: Later,
+  applyAction: typeof performAction,
+) {
   const customId: string = interaction.data?.custom_id ?? "";
   const [scope, a, b] = customId.split(":");
   const submission = parseModal(interaction.data);
@@ -603,7 +632,7 @@ async function handleModal(interaction: Interaction, env: Env, later: Later) {
     const action = a as MaintainerAction;
     const number = Number(b);
     later(async () => {
-      const message = await performAction(env, number, action, user.name, {
+      const message = await applyAction(env, number, action, user.name, {
         note: submission.values.note,
         release: submission.values.release,
         reference: submission.values.reference,

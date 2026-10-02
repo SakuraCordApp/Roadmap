@@ -220,11 +220,24 @@ export async function wakeDueJobs(env: Env): Promise<boolean> {
   );
 }
 
-/** One bounded recovery invocation; the atomic claim also protects against queue delivery. */
+/** Execute a specific saved job immediately, with the same lease and retry protection. */
+export async function runJobByKey(env: Env, key: string, handlers: Record<JobKind, JobHandler>) {
+  const row = await env.DB.prepare("SELECT id FROM jobs WHERE key=?")
+    .bind(key)
+    .first<{ id: number }>();
+  if (!row) return null;
+  await runJob(env, row.id, handlers);
+  return env.DB.prepare("SELECT key,status,last_error FROM jobs WHERE id=?")
+    .bind(row.id)
+    .first<{ key: string; status: string; last_error: string | null }>();
+}
+
+/** Recover report changes before background work; keep one bounded job per invocation. */
 export async function runNextDueJob(env: Env, handlers: Record<JobKind, JobHandler>) {
   const row = await env.DB.prepare(
     `SELECT id,key FROM jobs WHERE (status='pending' AND run_after<=?)
-     OR (status='running' AND locked_at<?) ORDER BY run_after LIMIT 1`,
+     OR (status='running' AND locked_at<?)
+     ORDER BY CASE WHEN kind='sync-issue' THEN 0 ELSE 1 END, run_after, id LIMIT 1`,
   )
     .bind(nowIso(), new Date(Date.now() - WAKE_LEASE_MS).toISOString())
     .first<{ id: number; key: string }>();
