@@ -92,8 +92,14 @@ The assessment label stays until its result is applied. Failed runs can be
 retried in Actions or through **Manage → Run triage & investigation**. Reporter
 answers to information requests start a new combined assessment. If the report
 body changes during a run, its stale result schedules a fresh assessment.
-Agent comments are updated in place when rerun; replayed result deliveries
-are idempotent. GitHub publishing credentials stay outside the read-only agent step.
+Each agent has one Components V2 status message per report thread, edited in
+place across runs. GitHub workflow events start and finish updates; while a run
+is active, the hub polls its job steps about once a minute. Unchanged cards are
+not edited. Status polling uses leased jobs through internal Worker RPC, so it
+continues when Queue delivery is paused. Triage adds its final assessment to the
+same card, and successful fix runs link their draft PR. Failed, cancelled, and timed-out runs retain their
+final status. Agent comments are updated in place when rerun; replayed result
+deliveries are idempotent. GitHub publishing credentials stay outside the read-only agent step.
 
 **Maintainers in Discord** use **Manage** on a report card to confirm, ask for
 info, plan for a milestone, mark duplicate/declined/can't reproduce, reopen, or
@@ -155,7 +161,10 @@ Secrets: `DISCORD_APPLICATION_ID`, `DISCORD_PUBLIC_KEY`, `DISCORD_BOT_TOKEN`,
 `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` (PKCS#8), `GITHUB_APP_WEBHOOK_SECRET`,
 `ROADMAP_ADMIN_TOKEN`. The app repository holds the `OPENAI_API_KEY` Actions
 secret; the Worker does not need it. The GitHub App's webhook URL is
-`https://roadmap.sakuracord.app/webhooks/github-app`.
+`https://roadmap.sakuracord.app/webhooks/github-app`. Agent progress requires
+the GitHub App’s **Actions: read** permission and **Workflow run** webhook
+subscription. The app repository’s agent workflows identify reports in their
+`run-name`; unrelated label-triggered runs are ignored.
 
 Editing the report form: change `src/report/schema.ts`, then regenerate the
 GitHub issue forms in the app repository with

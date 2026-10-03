@@ -17,7 +17,7 @@ import {
   type CommentLink,
   type DraftUser,
 } from "../db/store";
-import { DiscordError, webhookRequest, type Discord, type WebhookRef } from "../discord/rest";
+import { webhookRequest, withWritableThread, type WebhookRef } from "../discord/rest";
 import { attachmentProxyUrl, discordClient } from "../discord/threads";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
@@ -27,6 +27,8 @@ import { enqueue, enqueueMany } from "../jobs/queue";
 import { attachmentMarkdown, neutralizeUserText } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { githubToDiscord, nowIso, truncate } from "../util/text";
+import { commentAgentRun } from "../github/agent-runs";
+import { trackAgentRun } from "./agents";
 import { returnToTriage } from "./activity";
 
 // Three-way conversation sync. Every reply in a report's Discord post becomes a
@@ -45,33 +47,6 @@ async function forumWebhook(env: Env, threadId: string): Promise<WebhookRef | nu
   const thread = await getThread(env.DB, threadId);
   if (!thread) return null;
   return getJsonState<WebhookRef | null>(env.DB, webhookStateKey(thread.forumId), null);
-}
-
-/** Run a Discord write against a thread that may be archived or locked. */
-async function withWritableThread<T>(
-  discord: Discord,
-  threadId: string,
-  write: () => Promise<T>,
-): Promise<T> {
-  try {
-    return await write();
-  } catch (error) {
-    if (!(error instanceof DiscordError) || ![50083, 50001, 160005].includes(error.code ?? 0)) {
-      throw error;
-    }
-    const thread = await discord.get<{
-      thread_metadata?: { archived?: boolean; locked?: boolean };
-    }>(`/channels/${threadId}`);
-    await discord.patch(`/channels/${threadId}`, { archived: false, locked: false });
-    try {
-      return await write();
-    } finally {
-      await discord.patch(`/channels/${threadId}`, {
-        archived: Boolean(thread.thread_metadata?.archived),
-        locked: Boolean(thread.thread_metadata?.locked),
-      });
-    }
-  }
 }
 
 interface Persona {
@@ -222,6 +197,7 @@ export async function syncGithubComment(
   }
   if (ORIGIN_PATTERN.test(comment.body)) return;
   const agent = login === "github-actions[bot]" && AGENT_MARKER.test(comment.body);
+  const run = agent ? commentAgentRun(comment.body, issue.number) : null;
   if (!agent && (login === (await appBotLogin(env)) || comment.user?.type === "Bot")) return;
 
   const body = comment.body.replace(/<!--[\s\S]*?-->/g, "").trim();
@@ -240,7 +216,11 @@ export async function syncGithubComment(
       contentHash: hash,
       createdAt: comment.created_at,
     }));
-  const author = agent ? "Triage & investigation agent" : login;
+  const author = agent
+    ? run?.kind === "fix"
+      ? "Fix agent"
+      : "Triage & investigation agent"
+    : login;
   await upsertCommentEvent(
     env.DB,
     { id: linkId, issueNumber: issue.number },
@@ -254,6 +234,10 @@ export async function syncGithubComment(
     },
     comment.created_at,
   );
+  if (run) {
+    await trackAgentRun(env, run, githubContent(body, comment.html_url, true));
+    return;
+  }
   if (!thread) return;
   const persona: Persona = {
     username: agent ? "Investigation agent · GitHub" : `${login} · GitHub`,

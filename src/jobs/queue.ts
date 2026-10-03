@@ -11,6 +11,7 @@ export type JobKind =
   | "sync-issue"
   | "triage"
   | "triage-result"
+  | "agent-status"
   | "embed"
   | "comment"
   | "discord-thread"

@@ -7,6 +7,7 @@ import { ensureSchema } from "./db/schema";
 import { getState, setState } from "./db/store";
 import { handleInteraction } from "./discord/interactions";
 import type { Env } from "./env";
+import type { AgentKind } from "./github/agent-runs";
 import { handleGithubWebhook } from "./github/webhook";
 import {
   cleanupJobs,
@@ -20,6 +21,7 @@ import {
 import { rpc } from "./rpc";
 import { versionOptions } from "./reports";
 import { pollDiscordThreads } from "./sync/comments";
+import { pollAgentRuns } from "./sync/agents";
 import { assessmentContext } from "./sync/triage";
 import { handlers } from "./jobs/handlers";
 import { errorMessage, HttpError } from "./util/http";
@@ -121,6 +123,26 @@ export class ReportSync extends WorkerEntrypoint<Env> {
   }
 }
 
+/** Keep progress timely even when Queue delivery is paused. Each card gets its own budget. */
+export class AgentProgress extends WorkerEntrypoint<Env> {
+  async run(number: number, kind: AgentKind) {
+    await ensureSchema(this.env.DB);
+    return runJobByKey(this.env, `agent-status:${number}:${kind}`, handlers);
+  }
+
+  async poll() {
+    await ensureSchema(this.env.DB);
+    const runs = await pollAgentRuns(this.env);
+    for (const run of runs) {
+      try {
+        await this.ctx.exports.AgentProgress.run(run.number, run.kind);
+      } catch (error) {
+        console.error("Agent progress refresh failed", errorMessage(error));
+      }
+    }
+  }
+}
+
 export default class Hub extends WorkerEntrypoint<Env> {
   override fetch(request: Request): Response | Promise<Response> {
     return app.fetch(request, this.env, this.ctx);
@@ -137,6 +159,8 @@ export default class Hub extends WorkerEntrypoint<Env> {
         console.error(`${name} failed`, errorMessage(error));
       }
     };
+    if (env.GITHUB_APP_ID && env.DISCORD_BOT_TOKEN)
+      await step("poll agents", () => this.ctx.exports.AgentProgress.poll());
     if (!(await wakeDueJobs(env)) && minute % 2 === 0) {
       // Keep making progress on the free plan even when Queue operations are exhausted.
       // Alternate recovery and polling so new Discord replies still enter D1.

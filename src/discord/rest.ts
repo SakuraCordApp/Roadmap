@@ -163,3 +163,30 @@ export function mentionUsers(userIds: string[]) {
 export function isDiscordStatus(error: unknown, status: number): boolean {
   return error instanceof DiscordError && error.status === status;
 }
+
+/** Run a Discord write against a thread that may be archived or locked. */
+export async function withWritableThread<T>(
+  discord: Discord,
+  threadId: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await write();
+  } catch (error) {
+    if (!(error instanceof DiscordError) || ![50083, 50001, 160005].includes(error.code ?? 0)) {
+      throw error;
+    }
+    const thread = await discord.get<{
+      thread_metadata?: { archived?: boolean; locked?: boolean };
+    }>(`/channels/${threadId}`);
+    await discord.patch(`/channels/${threadId}`, { archived: false, locked: false });
+    try {
+      return await write();
+    } finally {
+      await discord.patch(`/channels/${threadId}`, {
+        archived: Boolean(thread.thread_metadata?.archived),
+        locked: Boolean(thread.thread_metadata?.locked),
+      });
+    }
+  }
+}

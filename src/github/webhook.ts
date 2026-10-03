@@ -6,6 +6,8 @@ import { enqueue } from "../jobs/queue";
 import { constantTimeEqual, hmacSha256Hex } from "../util/crypto";
 import { json } from "../util/http";
 import { feedWorthy, renderFeed } from "./feed";
+import { identifyAgentRun } from "./agent-runs";
+import { trackAgentRun } from "../sync/agents";
 import { appBotLogin } from "./identity";
 
 const MAX_BODY = 5 * 1024 * 1024;
@@ -47,6 +49,11 @@ async function routeRepositoryEvent(
   const action: string | undefined = payload.action;
   const sender: string | undefined = payload.sender?.login;
   switch (event) {
+    case "workflow_run": {
+      const run = identifyAgentRun(payload.workflow_run);
+      if (run) await trackAgentRun(env, run);
+      return;
+    }
     case "issues": {
       const number: number = payload.issue.number;
       if (action === "deleted") {

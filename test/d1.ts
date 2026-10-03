@@ -15,7 +15,8 @@ function prepare(sql: string) {
       return { results: sqlite.prepare(sql).all(...values) };
     },
     async run() {
-      return sqlite.prepare(sql).run(...values);
+      const result = sqlite.prepare(sql).run(...values);
+      return { ...result, meta: { changes: Number(result.changes) } };
     },
   };
 }

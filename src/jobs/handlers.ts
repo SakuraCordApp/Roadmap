@@ -13,10 +13,13 @@ import { syncDiscordThread, syncGithubComment } from "../sync/comments";
 import { embedIssue, syncIssue } from "../sync/issue";
 import { applyTriageResult, runTriage } from "../sync/triage";
 
+import { syncAgentStatus } from "../sync/agents";
+
 export const handlers: Record<JobKind, JobHandler> = {
   "sync-issue": syncIssue,
   triage: runTriage,
   "triage-result": applyTriageResult,
+  "agent-status": syncAgentStatus,
   embed: embedIssue,
   comment: syncGithubComment,
   "discord-thread": syncDiscordThread,

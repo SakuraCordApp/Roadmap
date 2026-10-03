@@ -163,6 +163,21 @@ const MIGRATIONS: string[][] = [
       INSERT INTO issue_search(rowid,title,summary,body) VALUES(new.number,new.title,new.summary,new.body); END`,
     `INSERT INTO issue_search(issue_search) VALUES('rebuild')`,
   ],
+  [
+    `CREATE TABLE agent_runs (
+      issue_number INTEGER NOT NULL,
+      kind TEXT NOT NULL CHECK(kind IN ('investigate','fix')),
+      run_id INTEGER NOT NULL,
+      attempt INTEGER NOT NULL,
+      active INTEGER NOT NULL DEFAULT 1,
+      thread_id TEXT,
+      message_id TEXT,
+      content_hash TEXT,
+      result_text TEXT,
+      checked_at TEXT,
+      PRIMARY KEY(issue_number,kind)
+    )`,
+  ],
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;
