@@ -5,10 +5,17 @@ import { Discord, DiscordError } from "../src/discord/rest";
 import type { Env } from "../src/env";
 import { identifyAgentRun, type WorkflowRun } from "../src/github/agent-runs";
 import { GitHub } from "../src/github/client";
+import { handleGithubWebhook } from "../src/github/webhook";
+import { hmacSha256Hex } from "../src/util/crypto";
 import { pollAgentRuns, syncAgentStatus, trackAgentRun } from "../src/sync/agents";
 import { syncGithubComment } from "../src/sync/comments";
 
-const env = { DB: db, JOBS: { sendBatch: vi.fn() } } as unknown as Env;
+vi.mock("../src/github/identity", () => ({ appBotLogin: async () => "hub[bot]" }));
+const env = {
+  DB: db,
+  JOBS: { sendBatch: vi.fn() },
+  GITHUB_APP_WEBHOOK_SECRET: "test-secret",
+} as unknown as Env;
 const payload = { number: 51, kind: "investigate" as const };
 const identity = { ...payload, runId: 100, attempt: 1 };
 let run: WorkflowRun;
@@ -27,7 +34,7 @@ afterAll(() => {
 });
 beforeEach(() => {
   sqlite.exec(`DELETE FROM agent_runs; DELETE FROM jobs; DELETE FROM kv;
-    DELETE FROM issues; DELETE FROM threads; DELETE FROM comment_links; DELETE FROM events;
+    DELETE FROM issues; DELETE FROM threads; DELETE FROM comment_links; DELETE FROM events; DELETE FROM webhook_deliveries;
     INSERT INTO issues(number,title,state,status,created_at,updated_at,synced_at)
       VALUES(51,'Report','open','new','2026-10-03','2026-10-03','2026-10-03');
     INSERT INTO threads(thread_id,issue_number,forum_id,role,created_at)
@@ -89,6 +96,27 @@ describe("agent progress delivery", () => {
       html_url: "https://github.com/SakuraCordApp/SakuraCord/issues/51#issuecomment-123",
       created_at: "2026-10-03T12:01:00Z",
     };
+    const body = JSON.stringify({
+      action: "created",
+      repository: { full_name: "SakuraCordApp/SakuraCord" },
+      sender: comment.user,
+      issue: { number: 51 },
+      comment,
+    });
+    const response = await handleGithubWebhook(
+      new Request("https://hub/webhooks/github-app", {
+        method: "POST",
+        body,
+        headers: {
+          "X-GitHub-Event": "issue_comment",
+          "X-GitHub-Delivery": "result",
+          "X-Hub-Signature-256": `sha256=${await hmacSha256Hex("test-secret", body)}`,
+        },
+      }),
+      env,
+    );
+    expect(response.status).toBe(202);
+    expect(row().result_text).toContain("Found the cause.");
     await syncGithubComment(env, { number: 51, commentId: 123, action: "created" });
     run.status = "completed";
     run.conclusion = "success";

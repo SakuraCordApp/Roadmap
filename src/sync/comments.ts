@@ -161,6 +161,10 @@ function githubContent(body: string, url: string, agent: boolean): string {
   return `${text}\n-# [${agent ? "Full assessment" : "View"} on GitHub](<${url}>)`;
 }
 
+export function agentCommentContent(body: string, url: string): string {
+  return githubContent(body.replace(/<!--[\s\S]*?-->/g, "").trim(), url, true);
+}
+
 export async function syncGithubComment(
   env: Env,
   payload: { number: number; commentId: number; action: string },
@@ -235,7 +239,7 @@ export async function syncGithubComment(
     comment.created_at,
   );
   if (run) {
-    await trackAgentRun(env, run, githubContent(body, comment.html_url, true));
+    await trackAgentRun(env, run, agentCommentContent(comment.body, comment.html_url));
     return;
   }
   if (!thread) return;

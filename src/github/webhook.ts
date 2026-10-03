@@ -6,8 +6,9 @@ import { enqueue } from "../jobs/queue";
 import { constantTimeEqual, hmacSha256Hex } from "../util/crypto";
 import { json } from "../util/http";
 import { feedWorthy, renderFeed } from "./feed";
-import { identifyAgentRun } from "./agent-runs";
+import { commentAgentRun, identifyAgentRun } from "./agent-runs";
 import { trackAgentRun } from "../sync/agents";
+import { agentCommentContent } from "../sync/comments";
 import { appBotLogin } from "./identity";
 
 const MAX_BODY = 5 * 1024 * 1024;
@@ -73,6 +74,17 @@ async function routeRepositoryEvent(
     }
     case "issue_comment": {
       if (payload.issue.pull_request) return;
+      // Capture the assessment immediately so the status card can finish even
+      // when comment mirroring is waiting for Queue recovery.
+      if (action !== "deleted" && payload.comment.user?.login === "github-actions[bot]") {
+        const run = commentAgentRun(payload.comment.body, payload.issue.number);
+        if (run)
+          await trackAgentRun(
+            env,
+            run,
+            agentCommentContent(payload.comment.body, payload.comment.html_url),
+          );
+      }
       await enqueue(env, "comment", String(payload.comment.id), {
         number: payload.issue.number,
         commentId: payload.comment.id,
