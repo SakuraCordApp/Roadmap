@@ -74,6 +74,29 @@ describe("discordToGithub", () => {
 });
 
 describe("feedWorthy", () => {
+  it("omits skipped agent noise without hiding real completed workflow runs", () => {
+    const payload = {
+      action: "completed",
+      sender: { login: "super", type: "User" },
+    };
+    for (const workflow_run of [
+      { name: "CI", conclusion: "skipped" },
+      { name: "Agent · Skipped", conclusion: "cancelled" },
+      {
+        name: "Agent · Triage and investigate",
+        display_title: "Agent · Skipped",
+        conclusion: "cancelled",
+      },
+    ]) {
+      expect(feedWorthy("workflow_run", { ...payload, workflow_run }, null)).toBe(false);
+    }
+    for (const conclusion of ["success", "failure", "cancelled"]) {
+      const workflow_run = { name: "Agent · Triage · #51", conclusion };
+      expect(feedWorthy("workflow_run", { ...payload, workflow_run }, null)).toBe(true);
+    }
+    expect(feedWorthy("workflow_run", { ...payload, action: "in_progress" }, null)).toBe(false);
+  });
+
   it("ignores the hub's own issue traffic and label noise", () => {
     const sender = { login: "sakuracord-bot[bot]", type: "Bot" };
     expect(feedWorthy("issues", { action: "opened", sender }, "sakuracord-bot[bot]")).toBe(false);

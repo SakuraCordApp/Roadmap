@@ -54,7 +54,17 @@ export function feedWorthy(event: string, payload: JsonObject, botLogin: string 
     return ["opened", "closed", "reopened", "ready_for_review"].includes(action ?? "");
   }
   if (event === "pull_request_review") return action === "submitted";
-  if (event === "workflow_run") return action === "completed";
+  if (event === "workflow_run") {
+    const run = asObject(payload.workflow_run);
+    // Label-triggered agent workflows also complete without running a job.
+    // Their no-op runs can be canceled by concurrency before being skipped.
+    return (
+      action === "completed" &&
+      run.conclusion !== "skipped" &&
+      run.display_title !== "Agent · Skipped" &&
+      run.name !== "Agent · Skipped"
+    );
+  }
   return true;
 }
 
