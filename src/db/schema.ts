@@ -178,6 +178,26 @@ const MIGRATIONS: string[][] = [
       PRIMARY KEY(issue_number,kind)
     )`,
   ],
+  [
+    // GitHub updates feed: one Discord message per card, rendered from webhook items.
+    `CREATE TABLE feed_cards (
+      key TEXT PRIMARY KEY,
+      message_id TEXT,
+      content_hash TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE TABLE feed_items (
+      card_key TEXT NOT NULL,
+      item_key TEXT NOT NULL,
+      rank INTEGER NOT NULL DEFAULT 0,
+      data_json TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      PRIMARY KEY(card_key,item_key)
+    )`,
+    `CREATE INDEX idx_feed_items_item ON feed_items(item_key)`,
+    `CREATE INDEX idx_feed_items_updated ON feed_items(updated_at)`,
+  ],
 ];
 
 export const SCHEMA_VERSION = MIGRATIONS.length;

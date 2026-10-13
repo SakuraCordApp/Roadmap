@@ -262,6 +262,7 @@ export async function jobStats(env: Env) {
 
 export async function cleanupJobs(env: Env): Promise<void> {
   const dayAgo = new Date(Date.now() - 86_400_000).toISOString();
+  const twoWeeksAgo = new Date(Date.now() - 14 * 86_400_000).toISOString();
   await env.DB.batch([
     env.DB.prepare("DELETE FROM jobs WHERE status='done' AND updated_at<?").bind(dayAgo),
     env.DB.prepare("DELETE FROM drafts WHERE expires_at<?").bind(nowIso()),
@@ -269,5 +270,7 @@ export async function cleanupJobs(env: Env): Promise<void> {
       new Date(Date.now() - 7 * 86_400_000).toISOString(),
     ),
     env.DB.prepare("DELETE FROM attachment_cache WHERE expires_at<?").bind(nowIso()),
+    env.DB.prepare("DELETE FROM feed_items WHERE updated_at<?").bind(twoWeeksAgo),
+    env.DB.prepare("DELETE FROM feed_cards WHERE updated_at<?").bind(twoWeeksAgo),
   ]);
 }

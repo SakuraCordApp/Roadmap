@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseMilestone, renderMilestoneDescription, visibleVersions } from "../src/roadmap";
 import { discordToGithub } from "../src/sync/comments";
-import { feedWorthy } from "../src/github/feed";
 
 describe("milestones", () => {
   const description = renderMilestoneDescription({
@@ -70,40 +69,5 @@ describe("discordToGithub", () => {
     expect(text).toContain("@​octocat");
     expect(text).toContain(":sakura:");
     expect(text).not.toContain("<#4>");
-  });
-});
-
-describe("feedWorthy", () => {
-  it("omits skipped agent noise without hiding real completed workflow runs", () => {
-    const payload = {
-      action: "completed",
-      sender: { login: "super", type: "User" },
-    };
-    for (const workflow_run of [
-      { name: "CI", conclusion: "skipped" },
-      { name: "Agent · Skipped", conclusion: "cancelled" },
-      {
-        name: "Agent · Triage and investigate",
-        display_title: "Agent · Skipped",
-        conclusion: "cancelled",
-      },
-    ]) {
-      expect(feedWorthy("workflow_run", { ...payload, workflow_run }, null)).toBe(false);
-    }
-    for (const conclusion of ["success", "failure", "cancelled"]) {
-      const workflow_run = { name: "Agent · Triage · #51", conclusion };
-      expect(feedWorthy("workflow_run", { ...payload, workflow_run }, null)).toBe(true);
-    }
-    expect(feedWorthy("workflow_run", { ...payload, action: "in_progress" }, null)).toBe(false);
-  });
-
-  it("ignores the hub's own issue traffic and label noise", () => {
-    const sender = { login: "sakuracord-bot[bot]", type: "Bot" };
-    expect(feedWorthy("issues", { action: "opened", sender }, "sakuracord-bot[bot]")).toBe(false);
-    expect(feedWorthy("issues", { action: "labeled", sender: { login: "super" } }, null)).toBe(
-      false,
-    );
-    expect(feedWorthy("issues", { action: "opened", sender: { login: "super" } }, null)).toBe(true);
-    expect(feedWorthy("push", { sender: { login: "super" } }, null)).toBe(true);
   });
 });

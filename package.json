@@ -18,6 +18,7 @@
     "types:check": "wrangler types src/worker-configuration.d.ts --include-runtime=false --check",
     "issue-forms": "tsx scripts/issue-forms.ts",
     "tag-icons": "node scripts/tag-icons.mjs",
+    "feed-emojis": "node scripts/feed-emojis.mjs",
     "migrate": "tsx scripts/migrate.ts"
   },
   "dependencies": {

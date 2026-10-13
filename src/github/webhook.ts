@@ -5,7 +5,7 @@ import type { Env } from "../env";
 import { enqueue } from "../jobs/queue";
 import { constantTimeEqual, hmacSha256Hex } from "../util/crypto";
 import { json } from "../util/http";
-import { feedWorthy, renderFeed } from "./feed";
+import { recordFeedEvent } from "./feed";
 import { commentAgentRun, identifyAgentRun } from "./agent-runs";
 import { trackAgentRun } from "../sync/agents";
 import { agentCommentContent } from "../sync/comments";
@@ -33,10 +33,7 @@ export async function handleGithubWebhook(request: Request, env: Env): Promise<R
   if (event === "ping" || !repository) return json({ accepted: true }, 202);
 
   const bot = await appBotLogin(env);
-  if (FEED_REPOSITORIES.has(repository) && feedWorthy(event, payload, bot)) {
-    const updates = renderFeed(event, payload);
-    if (updates.length) await enqueue(env, "feed", delivery, { delivery, updates });
-  }
+  if (FEED_REPOSITORIES.has(repository)) await recordFeedEvent(env, event, payload, delivery, bot);
   if (repository === REPOSITORY_SLUG) await routeRepositoryEvent(env, event, payload, bot);
   return json({ accepted: true }, 202);
 }
