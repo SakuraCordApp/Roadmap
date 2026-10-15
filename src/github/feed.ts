@@ -14,6 +14,8 @@ import {
   renderPush,
   type Actor,
   type Card,
+  type CheckItem,
+  type GreptileReviewItem,
   type JobItem,
   type NoteItem,
   type PullItem,
@@ -25,9 +27,9 @@ import {
 //
 // Pushes, pull requests and checks are stateful cards: each webhook upserts an
 // item in D1, and one coalesced job renders every item of a card into a single
-// message that is posted once and then edited. Only the first post pings:
-// one per push, per opened PR, per commit's checks, and per human comment or
-// review. Checks render from webhook payloads alone; nothing is fetched.
+// message that is posted once and then edited. Checks never ping; other first
+// posts ping once per push, per opened PR, and per human comment or review.
+// Checks and Greptile summaries render from webhook payloads alone.
 
 type JsonObject = Record<string, any>;
 
@@ -72,6 +74,16 @@ export async function recordFeedEvent(
       return recordRun(env, payload.workflow_run, base);
     case "workflow_job":
       return recordJob(env, payload.workflow_job);
+    case "check_run":
+      if (["created", "completed"].includes(action ?? ""))
+        await recordCheck(env, payload.check_run, base);
+      return;
+    case "issue_comment":
+    case "pull_request_review":
+      if (isGreptile((payload.comment ?? payload.review)?.user)) {
+        await recordGreptileReview(env, event, action, payload, base);
+        return;
+      }
   }
   const note = human ? noteFor(event, action, payload, base, botLogin) : null;
   if (note) await enqueue(env, "feed", `note:${delivery}`, { note: note.item, ping: note.ping });
@@ -218,6 +230,89 @@ async function recordJob(env: Env, job: JsonObject | undefined) {
   if (owner) await enqueue(env, "feed", owner.card_key, { card: owner.card_key }, COALESCE_SECONDS);
 }
 
+async function recordCheck(env: Env, check: JsonObject | undefined, base: Base) {
+  // Actions jobs already arrive through workflow_job, including ignored agent runs.
+  if (!check?.id || !check.head_sha || !check.app?.slug || check.app.slug === "github-actions")
+    return;
+  const card = `ci:${base.repo}:${check.head_sha}`;
+  const pull = check.pull_requests?.[0];
+  const item: CheckItem = {
+    ...base,
+    id: check.id,
+    app: check.app.slug,
+    name: check.name ?? check.app.name ?? "Check",
+    sha: check.head_sha,
+    status: check.status,
+    conclusion: check.conclusion ?? null,
+    startedAt: check.started_at ?? undefined,
+    completedAt: check.completed_at ?? undefined,
+    url:
+      https(check.details_url) ??
+      https(check.html_url) ??
+      `${base.repoUrl}/commit/${check.head_sha}`,
+    pr: num(pull?.number),
+    branch: pull?.head?.ref ?? check.check_suite?.head_branch ?? undefined,
+  };
+  // A restarted check can reuse its ID; its new start outranks the old completion.
+  const rank = (Date.parse(check.started_at) || 0) * 10 + progress(0, item.status);
+  await saveItem(env, card, `check:${item.id}`, rank, item);
+  await enqueue(env, "feed", card, { card }, COALESCE_SECONDS);
+}
+
+function isGreptile(user: JsonObject | undefined): boolean {
+  return user?.type === "Bot" && user.login === "greptile-apps[bot]";
+}
+
+async function recordGreptileReview(
+  env: Env,
+  event: string,
+  action: string | undefined,
+  payload: JsonObject,
+  base: Base,
+) {
+  const comment = event === "issue_comment" ? payload.comment : payload.review;
+  const pull = payload.issue ?? payload.pull_request;
+  if (!pull?.number || (event === "issue_comment" && !pull.pull_request)) return;
+  if (!["created", "edited", "submitted", "deleted", "dismissed"].includes(action ?? "")) return;
+  const body = String(comment.body ?? "");
+  // Inline findings and empty review submissions are represented by the summary.
+  if (!body.includes("<!-- greptile_summary -->") && !/confidence score\s*:/i.test(body)) return;
+  const scoreText =
+    /<!--\s*greptile_confidence_score:\s*([0-5])\s*-->/.exec(body)?.[1] ??
+    /confidence score\s*:\s*([0-5])\s*\/\s*5\b/i.exec(body.replace(/<[^>]*>/g, ""))?.[1];
+  const commitLink =
+    /Last reviewed commit:[\s\S]*?\]\((https:\/\/github\.com\/[^\s)]+\/commit\/([a-f0-9]{40}))\)/i.exec(
+      body,
+    );
+  // Never attach an old summary to the PR's current head, which may already have moved.
+  const sha =
+    event === "pull_request_review"
+      ? comment.commit_id
+      : commitLink?.[1]?.toLowerCase() === `${base.repoUrl}/commit/${commitLink?.[2]}`.toLowerCase()
+        ? commitLink[2]
+        : undefined;
+  if (typeof sha !== "string" || !/^[a-f0-9]{40}$/i.test(sha)) return;
+  const item: GreptileReviewItem = {
+    ...base,
+    sha: sha.toLowerCase(),
+    pr: pull.number,
+    title: String(pull.title ?? ""),
+    url: https(comment.html_url) ?? `${base.repoUrl}/pull/${pull.number}`,
+    ...(scoreText !== undefined ? { score: Number(scoreText) } : {}),
+    updatedAt: comment.updated_at ?? comment.submitted_at ?? comment.created_at,
+    deleted: action === "deleted" || action === "dismissed",
+  };
+  const card = `ci:${base.repo}:${item.sha}`;
+  await saveItem(
+    env,
+    card,
+    `greptile:${event}:${comment.id}`,
+    (Date.parse(item.updatedAt) || 0) * 10 + (item.deleted ? 1 : 0),
+    item,
+  );
+  await enqueue(env, "feed", card, { card }, COALESCE_SECONDS);
+}
+
 function noteFor(
   event: string,
   action: string | undefined,
@@ -342,7 +437,7 @@ export async function deliverFeed(
   const hash = await sha256(JSON.stringify(card));
   if (row?.content_hash === hash) return;
   if (!row?.message_id) {
-    const id = await post(env, `card:${key}`, card, true);
+    const id = await post(env, `card:${key}`, card, !key.startsWith("ci:"));
     await env.DB.prepare(
       `INSERT INTO feed_cards(key,message_id,content_hash,created_at,updated_at) VALUES(?,?,?,?,?)
        ON CONFLICT(key) DO UPDATE SET message_id=excluded.message_id,
@@ -377,14 +472,21 @@ async function renderCard(env: Env, key: string, posted: boolean): Promise<Card 
   }
   if (key.startsWith("ci:")) {
     const runs: RunItem[] = items.filter((item) => item.key.startsWith("run:")).map((i) => i.data);
-    if (!runs.length) return null;
-    const { results } = await env.DB.prepare(
-      `SELECT data_json FROM feed_items WHERE card_key IN (${runs.map(() => "?").join(",")})`,
-    )
-      .bind(...runs.map((run) => `jobs:${run.id}`))
-      .all<{ data_json: string }>();
+    const checks: CheckItem[] = items
+      .filter((item) => item.key.startsWith("check:"))
+      .map((i) => i.data);
+    const reviews: GreptileReviewItem[] = items
+      .filter((item) => item.key.startsWith("greptile:"))
+      .map((i) => i.data);
+    const { results } = runs.length
+      ? await env.DB.prepare(
+          `SELECT data_json FROM feed_items WHERE card_key IN (${runs.map(() => "?").join(",")})`,
+        )
+          .bind(...runs.map((run) => `jobs:${run.id}`))
+          .all<{ data_json: string }>()
+      : { results: [] };
     const jobs: JobItem[] = results.map((row) => JSON.parse(row.data_json));
-    return renderChecks(runs, jobs, await feedEmoji(env));
+    return renderChecks(runs, jobs, await feedEmoji(env), checks, reviews);
   }
   return null;
 }

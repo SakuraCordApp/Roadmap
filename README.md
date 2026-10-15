@@ -106,12 +106,18 @@ repositories becomes one card per change, edited in place rather than
 re-posted. Only a card's first post pings the updates role: once per push
 (every branch that received the same head commit shares the card, and merge
 pushes are titled after their PR), once per opened pull request (later merges,
-closes, and new commits edit it), once per commit's checks, and once per human
-comment or review. Issue and discussion changes post silently; bot-authored
+closes, and new commits edit it), and once per human comment or review.
+Checks, issue changes, and discussion changes post silently; bot-authored
 pushes, PRs, and comments, and branch create/delete events are left out.
-Checks cards group every workflow run for a commit and update live from
-`workflow_run` and `workflow_job` webhooks alone: each job shows a custom status
-emoji, its duration or a live Discord timer, and the failing step. Runs that
+Checks cards group workflow runs and third-party check runs for a commit and
+update from `workflow_run`, `workflow_job`, and `check_run` webhooks: each job
+shows a custom status emoji, its duration or a live Discord timer, and the
+failing step. Greptile's summary comments and scored reviews are an exception
+to the bot filter: they add a linked `x/5` score beside the duration on the
+Greptile check line. Scores received before any checks are saved until checks
+arrive. Edited summaries update the card without another ping, and
+scores belong to the explicitly reviewed commit, never an assumed current PR
+head. Runs that
 only skip, and agent or housekeeping triggers (`issues`, `workflow_run`,
 `pull_request_target`), never post. The status emoji are Discord application
 emoji uploaded on first use from `src/github/feed-emoji-assets.ts`
@@ -180,7 +186,10 @@ secret; the Worker does not need it. The GitHub App's webhook URL is
 `https://roadmap.sakuracord.app/webhooks/github-app`. Agent progress and the
 updates channel's checks cards require the GitHub App’s **Actions: read**
 permission and its **Workflow run** and **Workflow job** webhook
-subscriptions. The app repository’s agent workflows identify reports in their
+subscriptions. Third-party checks additionally require **Checks: read** and the
+**Check run** subscription; Greptile summaries require **Issue comment** and
+**Pull request review** subscriptions (with **Issues: read** and **Pull requests:
+read** permissions). The app repository’s agent workflows identify reports in their
 `run-name`; unrelated label-triggered runs are ignored.
 
 Editing the report form: change `src/report/schema.ts`, then regenerate the

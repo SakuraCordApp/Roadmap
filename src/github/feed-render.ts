@@ -98,6 +98,30 @@ export interface JobItem {
   failedStep?: string;
 }
 
+export interface CheckItem extends Repository {
+  id: number;
+  app: string;
+  name: string;
+  sha: string;
+  status: string;
+  conclusion: string | null;
+  startedAt?: string;
+  completedAt?: string;
+  url: string;
+  pr?: number;
+  branch?: string;
+}
+
+export interface GreptileReviewItem extends Repository {
+  sha: string;
+  pr: number;
+  title: string;
+  url: string;
+  score?: number;
+  updatedAt: string;
+  deleted: boolean;
+}
+
 export interface NoteItem extends Repository {
   kind: "comment" | "review" | "issue" | "discussion";
   title: string;
@@ -226,7 +250,7 @@ export function renderPull(pull: PullItem): Card {
 }
 
 // ---------------------------------------------------------------------------
-// Checks: every workflow run for one commit, edited live from webhook data.
+// Checks and review scores for one commit, edited live from webhook data.
 
 const FAILED = new Set(["failure", "timed_out", "startup_failure"]);
 const STATUS_ORDER: Record<CheckState, number> = {
@@ -278,21 +302,45 @@ export function renderChecks(
   runs: RunItem[],
   jobs: JobItem[],
   emoji: FeedEmoji,
+  checks: CheckItem[] = [],
+  reviews: GreptileReviewItem[] = [],
   now = Date.now(),
 ): Card | null {
   const visible = runs.filter(
     (run) => !(run.status === "completed" && run.conclusion === "skipped"),
   );
-  if (!visible.length || !checksStarted(visible, jobs)) return null;
+  // A replacement check run supersedes the earlier result from the same app.
+  const latestChecks = new Map<string, CheckItem>();
+  for (const check of [...checks].sort((a, b) => a.id - b.id))
+    latestChecks.set(`${check.app}:${check.name}`, check);
+  const external = [...latestChecks.values()];
+  const review = reviews
+    .filter((item) => !item.deleted)
+    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))[0];
+  // Reviews enrich checks; a summary alone must not create a checks card.
+  if (!visible.length && !external.length) return null;
+  if (!checksStarted(visible, jobs) && !external.some((check) => check.conclusion !== "skipped"))
+    return null;
   const groups = groupWorkflows(visible, jobs);
-  const states = groups.flatMap((group) => [
-    ...group.jobs.map((job) => job.state),
-    ...group.runs.map((run) => checkState(run.status, run.conclusion)),
-  ]);
+  const checkLines: JobLine[] = external.map((check) => ({
+    ...check,
+    state: checkState(check.status, check.conclusion),
+    branches: [],
+  }));
+  const states = [
+    ...checkLines.map((check) => check.state),
+    ...groups.flatMap((group) => [
+      ...group.jobs.map((job) => job.state),
+      ...group.runs.map((run) => checkState(run.status, run.conclusion)),
+    ]),
+  ];
   const running = states.some((state) => state === "running" || state === "queued");
   const failed = states.includes("failure");
-  const allJobs = groups.flatMap((group) => group.jobs);
-  const start = earliest(visible.map((run) => run.startedAt));
+  const allJobs = [...groups.flatMap((group) => group.jobs), ...checkLines];
+  const start = earliest([
+    ...visible.map((run) => run.startedAt),
+    ...external.map((check) => check.startedAt),
+  ]);
   const end = latest([
     ...allJobs.map((job) => job.completedAt),
     ...visible.map((run) => (run.status === "completed" ? run.updatedAt : undefined)),
@@ -302,12 +350,12 @@ export function renderChecks(
   let color: number;
   if (running) {
     const done = allJobs.filter((job) => job.state !== "running" && job.state !== "queued").length;
-    status = `${emoji.running} **Running** · ${done}/${allJobs.length} jobs${start ? ` · started ${relative(Math.min(start, now))}` : ""}`;
+    status = `${emoji.running} **Running** · ${done}/${allJobs.length} ${external.length ? "checks" : "jobs"}${start ? ` · started ${relative(Math.min(start, now))}` : ""}`;
     if (failed) status += ` · ${emoji.failure} ${plural(countFailed(allJobs), "failure")} so far`;
     color = failed ? COLORS.failure : COLORS.running;
   } else if (failed) {
     const count = countFailed(allJobs);
-    status = `${emoji.failure} **Failed** · ${count ? `${plural(count, "job")} failed` : "workflow failed"}${elapsed ? ` · ${elapsed}` : ""}`;
+    status = `${emoji.failure} **Failed** · ${count ? `${plural(count, external.length ? "check" : "job")} failed` : "workflow failed"}${elapsed ? ` · ${elapsed}` : ""}`;
     color = COLORS.failure;
   } else if (states.includes("success")) {
     status = `${emoji.success} **Passed**${elapsed ? ` in ${elapsed}` : ""}`;
@@ -317,16 +365,40 @@ export function renderChecks(
     color = COLORS.neutral;
   }
 
-  const first = visible[0]!;
-  const branches = [...new Set(visible.map((run) => run.branch))];
-  const pr = visible.find((run) => run.pr)?.pr;
+  const first = (visible[0] ?? external[0])!;
+  const branches = [
+    ...new Set(
+      [...visible.map((run) => run.branch), ...external.map((check) => check.branch)].filter(
+        (branch): branch is string => Boolean(branch),
+      ),
+    ),
+  ];
+  const pr =
+    visible.find((run) => run.pr)?.pr ?? external.find((check) => check.pr)?.pr ?? review?.pr;
   const commitUrl = `${first.repoUrl}/commit/${first.sha}`;
   const subject = pr
-    ? `[#${pr}](${first.repoUrl}/pull/${pr}) · \`${escapeCode(first.branch)}\``
-    : `[\`${first.sha.slice(0, 7)}\`](${commitUrl}) on ${branches.map((b) => `\`${escapeCode(b)}\``).join(", ")}`;
+    ? `[#${pr}](${first.repoUrl}/pull/${pr})${branches.length ? ` · ${branches.map((b) => `\`${escapeCode(b)}\``).join(", ")}` : ""}`
+    : `[\`${first.sha.slice(0, 7)}\`](${commitUrl})${branches.length ? ` on ${branches.map((b) => `\`${escapeCode(b)}\``).join(", ")}` : ""}`;
 
   const sections: string[] = [];
   let budget = MAX_JOB_LINES;
+  if (external.length || review?.score !== undefined) {
+    const lines = checkLines.slice(0, budget).map((check, index) => {
+      const source = external[index]!;
+      const score =
+        source.app === "greptile-apps" && review?.score !== undefined
+          ? ` · [${review.score}/5](${review.url})`
+          : "";
+      return `[${jobLine(check, emoji, false, now)}](${source.url})${score}`;
+    });
+    // Summary and check webhooks can arrive in either order.
+    if (review?.score !== undefined && !external.some((check) => check.app === "greptile-apps"))
+      lines.push(`Greptile Review · [${review.score}/5](${review.url})`);
+    budget -= lines.length;
+    if (external.length > MAX_JOB_LINES)
+      lines.push(`-# … and ${plural(external.length - MAX_JOB_LINES, "more check")}`);
+    sections.push(["**Checks**", ...lines].join("\n"));
+  }
   for (const group of groups) {
     const run = group.runs[0]!;
     const groupBranches = [...new Set(group.runs.map((r) => r.branch))];
@@ -353,17 +425,24 @@ export function renderChecks(
 
   return {
     embed: {
-      title: truncate(first.title || first.name, 256),
+      title: truncate(
+        visible[0]?.title || review?.title || `Checks for ${first.sha.slice(0, 7)}`,
+        256,
+      ),
       url: pr ? `${first.repoUrl}/pull/${pr}` : commitUrl,
       color,
       description: truncate([status, subject, "", sections.join("\n\n")].join("\n"), 4000),
-      ...(first.actor ? { author: author(first.actor) } : {}),
+      ...(visible[0]?.actor ? { author: author(visible[0].actor) } : {}),
       footer: { text: first.repo },
-      ...(validTime(first.startedAt) ? { timestamp: first.startedAt } : {}),
+      ...(start ? { timestamp: new Date(start).toISOString() } : {}),
     },
     button: {
       label: "View checks",
-      url: visible.length === 1 ? first.url : pr ? `${first.repoUrl}/pull/${pr}/checks` : commitUrl,
+      url: pr
+        ? `${first.repoUrl}/pull/${pr}/checks`
+        : visible.length === 1 && !external.length
+          ? first.url
+          : commitUrl,
     },
   };
 }
