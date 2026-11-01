@@ -17,8 +17,8 @@ flowchart LR
   H -->|forum posts, tags, cards, status pings, mirrored comments| D
   H --> DB[("D1: links, votes, cursors, cache")]
   H --> V[("Vectorize: duplicate search")]
-  G -->|agent: investigate / agent: fix labels| A["GitHub Actions<br/>Codex agents"]
-  A -->|GPT-6 Luna| O["OpenAI API"]
+  G -->|agent: investigate / agent: fix labels| A["GitHub Actions<br/>Claude Code agents"]
+  A -->|Claude Sonnet 5.5| O["Anthropic API"]
 ```
 
 ## How it works
@@ -61,8 +61,8 @@ changes and later regular-release announcements are posted without pings.
 
 **AI pipeline.**
 
-1. _Triage and investigation_ (one GitHub Actions job, read-only Codex with
-   GPT-6 Luna): every new bug or feature request gets `agent: investigate`.
+1. _Triage and investigation_ (one GitHub Actions job, read-only Claude Code
+   with Claude Sonnet 5.5): every new bug or feature request gets `agent: investigate`.
    The agent reads nightly's source, the report, up to 30 recent comments,
    up to four downloaded screenshots, and up to twelve similar reports, including closed reports and both categories.
    Candidate search combines full-text and semantic matches; text search still
@@ -72,14 +72,14 @@ changes and later regular-release announcements are posted without pings.
    The hub validates the Actions-authored result, applies metadata on GitHub,
    and mirrors the comment. Duplicate suggestions never auto-close a report.
    Misclassified reports move to the correct Discord forum, retaining the old
-   discussion with a link to the new post. No separate Luna call runs inside the Worker.
+   discussion with a link to the new post. No separate model call runs inside the Worker.
    The workflow verifies claimed fix commits against the reported release,
    latest published nightly, latest regular release, and current nightly code.
    High-confidence existing fixes enter release tracking; unreleased fixes stay
    open until a release contains them. A report whose build already contains the
    claimed fix remains open for regression investigation.
 2. _Fix_ (maintainer-triggered): `agent: fix` or **Manage → Run fix agent**
-   runs Codex with GPT-6 Luna on the `xcode-27` runner and opens a **draft** PR
+   runs Claude Code with Claude Sonnet 5.5 on the `xcode-27` runner and opens a **draft** PR
    against `nightly`. Nothing merges automatically.
 
 New bugs and suggestions must use the latest published nightly or latest
@@ -199,7 +199,7 @@ on `main`.
 
 Everything runs on free tiers: Workers, D1, Queues, Vectorize, and Workers AI
 on Cloudflare, plus GitHub Actions for the public repository. The only paid
-part is OpenAI API usage: GPT-6 Luna for triage, investigation, and fixes.
+part is Anthropic API usage: Claude Sonnet 5.5 for triage, investigation, and fixes.
 
 ## Free-tier capacity and recovery
 
@@ -229,8 +229,8 @@ with the account's other Workers; they are not dedicated to this hub.
   the issue archive approaches that ceiling.
 - [Workers AI](https://developers.cloudflare.com/workers-ai/platform/pricing/):
   10,000 neurons/day. bge-m3 embeddings cost 1,075 neurons per million input
-  tokens, so even 100,000 embedding tokens/day use about 108 neurons. Luna
-  assessment and fix agents use the separately funded OpenAI API.
+  tokens, so even 100,000 embedding tokens/day use about 108 neurons. The
+  assessment and fix agents use the separately funded Anthropic API.
 - Workers also have per-invocation CPU and subrequest limits, and an account
   request allowance. A low report count alone does not bound public website
   traffic, discussion volume, or usage by other projects.
