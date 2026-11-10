@@ -202,6 +202,11 @@ export async function applyTriageResult(
   patch.labels = [...labels];
   await github.request("PATCH", github.repo(`/issues/${issue.number}`), patch);
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
+  // The assessment card shows what this result changed.
+  await enqueue(env, "agent-status", `${issue.number}:investigate`, {
+    number: issue.number,
+    kind: "investigate",
+  });
   if (confirmedFix && resolution?.releaseTag)
     await enqueue(env, "ship", `${issue.number}:${resolution.releaseTag}`, {
       number: issue.number,

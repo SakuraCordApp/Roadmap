@@ -1,5 +1,5 @@
-import { REPOSITORY } from "../config";
-import { primaryThread } from "../db/store";
+import { REPOSITORY, statusLabel } from "../config";
+import { getIssue, primaryThread, type IssueRecord } from "../db/store";
 import { agentCard, type WorkflowJob } from "../discord/agent-card";
 import { DiscordError, withWritableThread } from "../discord/rest";
 import { discordClient } from "../discord/threads";
@@ -69,6 +69,22 @@ export async function pollAgentRuns(env: Env) {
   return results.map((row) => ({ number: row.issue_number, kind: row.kind }));
 }
 
+/** What a finished assessment did to the report, so the card doesn't stop at "Completed". */
+function assessmentOutcome(issue: IssueRecord | null, run: WorkflowRun): string {
+  if (!issue?.triagedAt || Date.parse(issue.triagedAt) < Date.parse(run.run_started_at))
+    return "⏳ Updating the report…";
+  switch (issue.status) {
+    case "needs_info":
+      return "❓ Waiting for answers to the questions below";
+    case "new":
+      return "👀 A maintainer will review it next";
+    case "in_nightly":
+      return `🌙 Marked ${issue.kind === "feature" ? "implemented" : "fixed"} in nightly`;
+    default:
+      return `Status: ${statusLabel(issue.status, issue.kind)}`;
+  }
+}
+
 export async function syncAgentStatus(
   env: Env,
   payload: { number: number; kind: AgentKind },
@@ -114,7 +130,11 @@ export async function syncAgentStatus(
     .bind(row.issue_number, row.kind)
     .first<RunRow>();
   if (!latest || latest.run_id !== row.run_id || latest.attempt !== row.attempt) return;
-  const card = agentCard(row.kind, run, jobs, latest.result_text, pull);
+  const outcome =
+    row.kind === "investigate" && run.conclusion === "success"
+      ? assessmentOutcome(await getIssue(env.DB, row.issue_number), run)
+      : undefined;
+  const card = agentCard(row.kind, run, jobs, latest.result_text, pull, outcome);
   const hash = await sha256(JSON.stringify(card));
   let messageId = latest.thread_id === thread.threadId ? latest.message_id : null;
   const discord = discordClient(env);

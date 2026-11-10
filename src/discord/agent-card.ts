@@ -16,6 +16,7 @@ export function agentCard(
   jobs: WorkflowJob[],
   result: string | null,
   pull?: { number: number; html_url: string },
+  outcome?: string,
 ) {
   const done = run.status === "completed";
   const success = done && run.conclusion === "success";
@@ -44,7 +45,7 @@ export function agentCard(
   const blocks: unknown[] = [
     {
       type: 10,
-      content: `### ${kind === "investigate" ? "🔎 Triage & investigation" : "🛠️ Fix agent"}\n**${status}**`,
+      content: `### ${kind === "investigate" ? "🔎 Triage & investigation" : "🛠️ Fix agent"}\n**${status}**${outcome ? ` · ${outcome}` : ""}`,
     },
   ];
   if (result) blocks.push({ type: 10, content: truncate(result, 2600) });
