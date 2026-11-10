@@ -114,7 +114,8 @@ export async function checkReportVersion(env: Env, issue: GhIssue): Promise<bool
       labels: [...labels.filter((label) => !label.startsWith("status: ")), "status: needs info"],
     });
   const noticeKey = `report:version-notice:${issue.number}`;
-  if ((await getState(env.DB, noticeKey)) !== normalizeVersion(value)) {
+  const noticed = await getState(env.DB, noticeKey);
+  if (noticed === null || normalizeVersion(noticed) !== normalizeVersion(value)) {
     await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
       body: `Please update and retest on ${releases.map((r) => `[${r.version} (${r.channel})](${r.url})`).join(" or ")}, then edit the **SakuraCord version** field in this issue. Only the latest published nightly and regular releases are supported. Assessment will start after the version is corrected. A regular-release user does not need to switch to nightly.`,
     });
