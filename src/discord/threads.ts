@@ -17,7 +17,7 @@ import { enqueue } from "../jobs/queue";
 import type { Env } from "../env";
 import { sha256 } from "../util/crypto";
 import { nowIso, truncate } from "../util/text";
-import { issueCard, PING_SUBSCRIBERS, statusMessageText, threadUrl } from "./cards";
+import { issueCard, PING_SUBSCRIBERS, statusMessageText, threadNotice, threadUrl } from "./cards";
 import { Discord, DiscordError, mentionUsers, noMentions, type UploadFile } from "./rest";
 
 export interface ForumTagMap {
@@ -286,7 +286,7 @@ async function announceStatus(
     : text;
   await discordClient(env).post(
     `/channels/${thread.threadId}/messages`,
-    { content: truncate(content, 2000), allowed_mentions: mentionUsers(mentions), flags: 1 << 2 },
+    { ...threadNotice(content, issue.status), allowed_mentions: mentionUsers(mentions) },
     { nonceKey: `status:${issue.number}:${previous}:${issue.status}:${issue.updatedAt}` },
   );
 }
@@ -317,11 +317,13 @@ async function projectMergedThread(env: Env, thread: ThreadRecord, issue: IssueR
   await discord.post(
     `/channels/${thread.threadId}/messages`,
     {
-      content: `🔁 **${relocated ? "Reclassified — continue with" : "Merged into"} #${issue.number}: ${truncate(issue.title, 150)}.**${
-        primary ? ` Follow ${threadUrl(DISCORD.guildId, primary.threadId)} for updates.` : ""
-      }`,
+      ...threadNotice(
+        `🔁 **${relocated ? "Reclassified — continue with" : "Merged into"} #${issue.number}: ${truncate(issue.title, 150)}.**${
+          primary ? ` Follow ${threadUrl(DISCORD.guildId, primary.threadId)} for updates.` : ""
+        }`,
+        "duplicate",
+      ),
       allowed_mentions: noMentions,
-      flags: 1 << 2,
     },
     { nonceKey: `merged:${thread.threadId}:${issue.number}` },
   );

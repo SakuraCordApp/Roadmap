@@ -206,6 +206,23 @@ export interface StatusMessageInput {
   duplicateThreadId?: string | null;
 }
 
+/**
+ * A hub notice in a report's post, styled like the report card: a container
+ * tinted with the status it announces. V2 messages render no link embeds.
+ */
+export function threadNotice(text: string, status: StatusId | null = null) {
+  return {
+    flags: COMPONENTS_V2,
+    components: [
+      {
+        type: 17,
+        accent_color: status ? colorOf(status) : BRAND.primary,
+        components: [{ type: 10, content: truncate(text, 3800) }],
+      },
+    ],
+  };
+}
+
 /** The message posted in a thread when an issue's status changes. */
 export function statusMessageText(input: StatusMessageInput): string {
   const { issue } = input;
@@ -229,7 +246,9 @@ export function statusMessageText(input: StatusMessageInput): string {
         : "🌱 **Back in triage.**";
       break;
     case "needs_info": {
-      const questions = issue.triage?.needsInformation ? issue.triage.questions : [];
+      // A maintainer's own question replaces the assessment's earlier ones.
+      const questions =
+        !input.note?.text && issue.triage?.needsInformation ? issue.triage.questions : [];
       text = `❓ **More information needed.**${questions.length ? `\n${questions.map((q) => `> ${escapeDiscord(q)}`).join("\n")}` : ""}\n-# Reply in this post or use **Add details** on the report card.`;
       break;
     }
@@ -269,8 +288,7 @@ export function statusMessageText(input: StatusMessageInput): string {
       text = `🚫 **${label}.**`;
       break;
     case "cant_reproduce":
-      text =
-        "🔍 **Can't reproduce.** If it happens again, use **Add details** with new information and we'll take another look.";
+      text = `🔍 **Can't reproduce.** If it still happens on the latest release, comment on the [GitHub issue](${issueUrl(issue.number)}) with what's changed and we'll take another look.`;
       break;
   }
   if (input.note?.text) {
