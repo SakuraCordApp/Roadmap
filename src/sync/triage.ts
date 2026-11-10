@@ -15,7 +15,6 @@ import {
   REPOSITORY_URL,
   STATUS_BY_ID,
   areaLabel,
-  releaseDisplayName,
   priorityLabel,
 } from "../config";
 import {
@@ -120,9 +119,9 @@ export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
     !["fixed_unreleased", "fixed_nightly", "fixed_regular"].includes(resolution.state) ||
     !STATUS_BY_ID.get(issue.status)!.open ||
     issue.fixes.some((fix) => fix.sha === resolution.commit) ||
-    // Already confirmed in that release; a reopened report needs a new finding.
-    (resolution.releaseTag &&
-      [issue.shippedIn, issue.shippedStableIn].includes(releaseDisplayName(resolution.releaseTag)))
+    // A confirmed release records no commit, and the maintainer may have picked
+    // a later release; after any confirmed shipment a reopened report is theirs.
+    issue.shippedIn
   )
     return null;
   return { commit: resolution.commit, releaseTag: resolution.releaseTag };
