@@ -226,7 +226,11 @@ export function statusMessageText(input: StatusMessageInput): string {
     case "new":
       text = reopened
         ? "🔄 **Reopened.** The team will take another look."
-        : "🌱 **Back in triage.**";
+        : input.previous !== "needs_info"
+          ? "🌱 **Back in triage.**"
+          : issue.triagedAt
+            ? "🌱 **Back in triage.** Thanks for the details. A maintainer will review them."
+            : "🌱 **Back in triage.** Thanks for the details. The assessment is running again with them.";
       break;
     case "needs_info": {
       const questions = issue.triage?.needsInformation ? issue.triage.questions : [];

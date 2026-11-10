@@ -20,6 +20,7 @@ import { enqueue, jobStats, runNextDueJob, type JobKind } from "../jobs/queue";
 import { setupDiscord, checkBotPermissions } from "../setup/discord";
 import { discordClient } from "../discord/threads";
 import { setupGithub } from "../setup/github";
+import { resetAnswerReassessments } from "../sync/activity";
 import { recordFromGithub } from "../sync/issue";
 import { constantTimeEqual } from "../util/crypto";
 import { HttpError } from "../util/http";
@@ -123,6 +124,7 @@ admin.post("/reindex", async (c) => {
 
 admin.post("/retriage/:number", async (c) => {
   const number = Number(c.req.param("number"));
+  await resetAnswerReassessments(c.env, number);
   await patchIssue(c.env.DB, number, { triagedAt: null });
   await enqueue(c.env, "triage", String(number), { number, force: true });
   return c.json({ queued: true });

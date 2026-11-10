@@ -26,6 +26,7 @@ import { statusGithubLabel } from "../lifecycle";
 import { valuesFromBody } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { nowIso } from "../util/text";
+import { ANSWER_REASSESSMENTS, answerReassessments } from "./activity";
 
 /** Public report context for the read-only Actions agent, bounded to twelve candidates. */
 export async function assessmentContext(env: Env, number: number) {
@@ -62,6 +63,8 @@ export async function assessmentContext(env: Env, number: number) {
   return {
     areas: AREAS,
     priorities: PRIORITIES,
+    questionsAllowed: (await answerReassessments(env, number)) < ANSWER_REASSESSMENTS,
+    previousQuestions: issue.triage?.needsInformation ? issue.triage.questions : [],
     candidates,
     reportedVersion,
     reportedRelease,
@@ -183,7 +186,8 @@ export async function applyTriageResult(
       const ask =
         result.kind === "bug" &&
         result.needsInformation &&
-        !(result.duplicateOf && result.duplicateConfidence >= 0.75);
+        !(result.duplicateOf && result.duplicateConfidence >= 0.75) &&
+        (await answerReassessments(env, issue.number)) < ANSWER_REASSESSMENTS;
       labels.delete(statusGithubLabel("new")!);
       labels.delete(statusGithubLabel("needs_info")!);
       labels.add(statusGithubLabel(ask ? "needs_info" : confirmedFix ? "in_nightly" : "new")!);

@@ -29,13 +29,33 @@ import { referencedIssues, statusGithubLabel } from "../lifecycle";
 import { truncate } from "../util/text";
 import { NO_MIRROR } from "./markers";
 
+/**
+ * Answers restart the automated assessment at most this many times, and the
+ * last of those runs asks nothing more. Later answers wait for a maintainer.
+ */
+export const ANSWER_REASSESSMENTS = 2;
+const answerRunsKey = (number: number) => `triage:answer-runs:${number}`;
+
+export async function answerReassessments(env: Env, number: number): Promise<number> {
+  return Number((await getState(env.DB, answerRunsKey(number))) ?? 0);
+}
+
+/** A maintainer's deliberate rerun starts a fresh question allowance. */
+export async function resetAnswerReassessments(env: Env, number: number): Promise<void> {
+  await setState(env.DB, answerRunsKey(number), "0");
+}
+
 export async function returnToTriage(env: Env, number: number): Promise<void> {
   const github = new GitHub(env);
   const issue = await github.request<GhIssue>("GET", github.repo(`/issues/${number}`));
   if (issue.state !== "open") return;
   const labels = labelNames(issue).filter((name) => name !== statusGithubLabel("needs_info"));
   labels.push(statusGithubLabel("new")!);
-  await patchIssue(env.DB, number, { triagedAt: null });
+  const runs = await answerReassessments(env, number);
+  if (runs < ANSWER_REASSESSMENTS) {
+    await setState(env.DB, answerRunsKey(number), String(runs + 1));
+    await patchIssue(env.DB, number, { triagedAt: null });
+  }
   await github.request("PATCH", github.repo(`/issues/${number}`), { labels: [...new Set(labels)] });
   await enqueue(env, "sync-issue", String(number), { number });
 }
