@@ -108,6 +108,8 @@ export async function runTriage(
 
 export type FixProposal = { commit: string; releaseTag: string | null };
 
+const FIXED_STATES: readonly string[] = ["fixed_unreleased", "fixed_nightly", "fixed_regular"];
+
 /**
  * A verified fix the assessment found but did not apply on its own (it needs
  * high confidence), waiting for a maintainer to confirm it.
@@ -116,7 +118,7 @@ export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
   const resolution = issue.triage?.resolution;
   if (
     !resolution?.commit ||
-    !["fixed_unreleased", "fixed_nightly", "fixed_regular"].includes(resolution.state) ||
+    !FIXED_STATES.includes(resolution.state) ||
     !STATUS_BY_ID.get(issue.status)!.open ||
     // Any recorded fix or shipment, including a maintainer's own correction,
     // supersedes the assessment's finding.
@@ -177,7 +179,7 @@ export async function applyTriageResult(
     !result.needsInformation &&
     !result.duplicateOf &&
     resolution?.commit &&
-    ["fixed_unreleased", "fixed_nightly", "fixed_regular"].includes(resolution.state);
+    FIXED_STATES.includes(resolution.state);
   // Cache before removing the trigger label, so its webhook cannot start a
   // second run. Result retries still apply GitHub changes if that write failed.
   await patchIssue(env.DB, issue.number, {
