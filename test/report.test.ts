@@ -108,7 +108,17 @@ describe("supported release intake", () => {
     expect(choices.map((r) => r.tag)).toEqual(["v0.1.7-Beta-2", "v0.1.6"]);
     expect(matchingRelease("0.1.7 Beta 2", choices)?.channel).toBe("nightly");
     expect(matchingRelease("v0.1.6", choices)?.channel).toBe("regular");
-    for (const version of ["0.1.5", "0.1.7 Beta 1", "Built from source", "Other / not sure", ""])
+    expect(matchingRelease("0.1.7 Beta 2 (nightly)", choices)?.channel).toBe("nightly");
+    expect(matchingRelease("0.1.6 (Regular)", choices)?.channel).toBe("regular");
+    for (const version of [
+      "0.1.5",
+      "0.1.7 Beta 1",
+      "0.1.7 Beta 1 (nightly)",
+      "0.1.7 Beta 2 (latest)",
+      "Built from source",
+      "Other / not sure",
+      "",
+    ])
       expect(matchingRelease(version, choices)).toBeUndefined();
   });
 });
