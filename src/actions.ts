@@ -1,7 +1,7 @@
 import { markFixed } from "./fixes";
 import { AGENT_LABELS, STATUS_BY_ID, type StatusId } from "./config";
 import { getIssue, patchIssue, setPendingNote } from "./db/store";
-import { rejectAssessmentFixes, resetAnswerReassessments } from "./sync/activity";
+import { resetAnswerReassessments } from "./sync/activity";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
 import { labelNames, type GhIssue, type GhMilestone } from "./github/types";
@@ -159,9 +159,6 @@ export const duplicateClosure = (original: GhIssue) => ({
   duplicate_issue_id: original.id,
 });
 
-/** Actions that don't decide the report's status, so the assessment's links stand. */
-const NOT_STATUS_DECISIONS: ReadonlySet<MaintainerAction> = new Set(["plan", "investigate", "fix"]);
-
 /** Apply a maintainer action on GitHub. Discord follows via the sync job. */
 export async function performAction(
   env: Env,
@@ -296,7 +293,6 @@ export async function performAction(
       message = "The fix agent is starting. It will open a draft pull request when it's done.";
       break;
   }
-  if (!NOT_STATUS_DECISIONS.has(action)) await rejectAssessmentFixes(env, number);
   await enqueue(env, "sync-issue", String(number), { number });
   return message;
 }

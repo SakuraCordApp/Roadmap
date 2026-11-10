@@ -7,7 +7,6 @@ import {
   shipIssue,
   syncMilestones,
   syncPull,
-  syncPullReport,
   syncPush,
 } from "../sync/activity";
 import { syncDiscordThread, syncGithubComment } from "../sync/comments";
@@ -25,7 +24,6 @@ export const handlers: Record<JobKind, JobHandler> = {
   comment: syncGithubComment,
   "discord-thread": syncDiscordThread,
   pull: syncPull,
-  "pull-report": syncPullReport,
   push: syncPush,
   release: handleRelease,
   ship: shipIssue,

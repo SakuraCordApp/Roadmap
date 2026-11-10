@@ -1,12 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTriageResult, TRIAGE_MARKER } from "../src/ai/triage";
-import { performAction } from "../src/actions";
-import {
-  rejectAssessmentFixes,
-  returnToTriage,
-  syncPull,
-  syncPullReport,
-} from "../src/sync/activity";
+import { returnToTriage, syncPull } from "../src/sync/activity";
 import { applyTriageResult, runTriage } from "../src/sync/triage";
 import { sha256 } from "../src/util/crypto";
 import type { Env } from "../src/env";
@@ -19,7 +13,6 @@ const state = vi.hoisted(() => ({
   pull: {} as any,
   compare: "ahead",
   duringLookup: undefined as (() => void) | undefined,
-  linked: [] as number[],
   values: new Map<string, string>(),
   notes: new Map<string, { text: string; author: string }>(),
   request: vi.fn(),
@@ -51,7 +44,6 @@ vi.mock("../src/db/store", () => ({
     state.notes.clear();
     if (note) state.notes.set(note.status, { text: note.text, author: note.author });
   },
-  issuesFixedByPull: async () => state.linked,
   addEvent: async () => undefined,
   setPendingNote: async () => undefined,
 }));
@@ -72,7 +64,6 @@ beforeEach(async () => {
   state.values.clear();
   state.notes.clear();
   state.compare = "ahead";
-  state.linked = [];
   state.target = { number: 52, state: "open", state_reason: null, labels: ["status: confirmed"] };
   state.pull = {
     number: 60,
@@ -138,7 +129,9 @@ beforeEach(async () => {
     if (["/compare/", "/pulls/", "/issues/52"].some((prefix) => path.startsWith(prefix)))
       state.duringLookup?.();
     if (path.startsWith("/compare/")) return { status: state.compare };
-    if (path.startsWith("/pulls/")) return state.pull;
+    if (path.startsWith("/commits/")) return { sha: path.slice("/commits/".length) };
+    if (path.startsWith("/pulls/"))
+      return method === "PATCH" ? Object.assign(state.pull, body) : state.pull;
     if (path === "/issues/52") return state.target;
     if (method === "GET") return path.includes("/comments/") ? state.comment : state.current;
     if (method === "PATCH") Object.assign(state.current, body);
@@ -281,7 +274,8 @@ describe("combined assessment", () => {
     await applyTriageResult(env, { number: 51, commentId: 10 });
     expect(state.current.labels).toContain("status: in nightly");
     expect(state.issue.fixes[0].sha).toBe("a".repeat(40));
-    expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
+    // Each published release is only checked for the fix, as Mark as fixed does.
+    expect(state.current.state).toBe("open");
   });
 
   it("retries release tracking after GitHub metadata was already applied", async () => {
@@ -304,8 +298,8 @@ describe("combined assessment", () => {
     expect(state.enqueue).toHaveBeenCalledWith(
       env,
       "ship",
-      "51:v0.1.7-Beta-1",
-      expect.objectContaining({ tag: "v0.1.7-Beta-1" }),
+      "51:v0.1.6",
+      expect.objectContaining({ tag: "v0.1.6" }),
     );
   });
 
@@ -416,7 +410,7 @@ describe("status findings", () => {
     expect(state.current.type).toBe("Feature");
   });
 
-  it("marks an open pull request that fixes the report as in progress", async () => {
+  const fixedByPull = () => {
     result.triage.resolution = {
       state: "unresolved",
       commit: null,
@@ -425,104 +419,76 @@ describe("status findings", () => {
       explanation: "",
     };
     rate({ pullRequest: "high" });
+  };
+
+  it("adds Fixes #N to an open pull request once and leaves the rest to pull request tracking", async () => {
+    fixedByPull();
     state.pull.head.repo.full_name = "someone/SakuraCord";
     await apply();
-    expect(status()).toEqual(["status: new"]);
+    expect(state.pull.body).toBe("");
 
     state.values.clear();
     state.pull.head.repo.full_name = "SakuraCordApp/SakuraCord";
     state.current.labels.push("agent: investigate");
     await apply();
-    expect(status()).toEqual(["status: in progress"]);
-    expect(state.issue.fixes).toEqual([
-      expect.objectContaining({ kind: "pr", number: 60, state: "open" }),
-    ]);
-    expect(state.notes.get("in_progress")?.text).toBe("Set by the assessment.");
-
-    expect(state.enqueue).toHaveBeenCalledWith(env, "pull-report", "60:51", {
-      pull: 60,
-      number: 51,
-    });
-  });
-
-  it("follows a linked pull request from the report's live status", async () => {
-    result.triage.resolution = {
-      state: "unresolved",
-      commit: null,
-      releaseTag: null,
-      pullRequest: 60,
-      explanation: "",
-    };
-    rate({ pullRequest: "high" });
+    expect(state.pull.body).toBe("Fixes #51 (linked by the triage assessment)");
+    expect(state.enqueue).toHaveBeenCalledWith(env, "pull", "60", { number: 60 });
+    expect(status()).toEqual(["status: new"]);
+    state.values.clear();
+    state.current.labels.push("agent: investigate");
     await apply();
-    // The pull request closes before the report's cached status catches up.
-    expect(state.issue.status).toBe("new");
-    state.linked = [51];
-    state.pull.state = "closed";
+    expect(state.pull.body.match(/Fixes #51/g)).toHaveLength(1);
+
+    // The existing tracking: open moves to In Progress, merged to In Nightly.
     await syncPull(env, { number: 60 });
-    await syncPullReport(env, { pull: 60, number: 51 });
-    expect(status()).toEqual(["status: confirmed"]);
-  });
-
-  const linkedPull = (assessment: string) => {
-    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "open", assessment }];
-    state.current.labels = [`status: ${assessment.replace("_", " ")}`];
-  };
-  const merge = () =>
+    expect(status()).toEqual(["status: in progress"]);
+    state.issue.status = "in_progress";
     Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
-
-  it("moves a report to In Nightly only when its pull request landed on nightly", async () => {
-    linkedPull("in_progress");
-    merge();
-    state.pull.base = { ref: "feature/composer" };
-    state.compare = "diverged";
-    await syncPullReport(env, { pull: 60, number: 51 });
-    expect(status()).toEqual(["status: in progress"]);
-
-    state.pull.base.ref = "nightly";
-    await syncPullReport(env, { pull: 60, number: 51 });
+    await syncPull(env, { number: 60 });
     expect(status()).toEqual(["status: in nightly"]);
   });
 
-  it("keeps tracking a linked pull request through its own close and reopen", async () => {
-    linkedPull("in_progress");
-    state.pull.state = "closed";
-    await syncPullReport(env, { pull: 60, number: 51 });
-    expect(status()).toEqual(["status: confirmed"]);
-    state.pull.state = "open";
-    await syncPullReport(env, { pull: 60, number: 51 });
-    expect(status()).toEqual(["status: in progress"]);
-    merge();
-    await syncPullReport(env, { pull: 60, number: 51 });
+  it("records a high fix the way Mark as fixed does", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    await apply();
     expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes).toEqual([
+      expect.objectContaining({ kind: "commit", sha, state: "merged", base: "nightly" }),
+    ]);
+    expect(
+      state.request.mock.calls.filter(
+        ([method, path, body]) =>
+          method === "POST" &&
+          path === "/issues/51/comments" &&
+          body.body.includes("The assessment verified this is fixed in the code"),
+      ),
+    ).toHaveLength(1);
+    expect(state.enqueue).toHaveBeenCalledWith(env, "ship", "51:v0.1.6", expect.anything());
   });
 
-  it("lets a maintainer reject a linked pull request so it never ships the report", async () => {
-    // On GitHub: the status changes before its webhook rejects the link.
-    linkedPull("in_progress");
+  it("never re-applies a retried result after a maintainer corrected it", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "POST" && args[1] === "/issues/51/comments" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    expect(status()).toEqual(["status: in nightly"]);
     state.current.labels = ["status: confirmed"];
-    merge();
-    await syncPullReport(env, { pull: 60, number: 51 });
+    state.enqueue.mockClear();
+    const posts = () => state.request.mock.calls.filter(([method]) => method === "POST").length;
+    const before = posts();
+    await apply();
     expect(status()).toEqual(["status: confirmed"]);
-    expect(state.issue.fixes.some((fix: any) => fix.sha)).toBe(false);
-    await rejectAssessmentFixes(env, 51);
-    expect(state.issue.fixes).toEqual([]);
-
-    // In Discord's Manage menu.
-    linkedPull("in_progress");
-    state.pull.merged = false;
-    state.pull.state = "open";
-    await performAction(env, 51, "confirm", "maintainer");
-    expect(state.issue.fixes).toEqual([]);
-    merge();
-    await syncPullReport(env, { pull: 60, number: 51 });
-    expect(status()).toEqual(["status: confirmed"]);
-    expect(state.issue.fixes).toEqual([]);
-
-    // A pull request that names the report still moves it, as before.
-    Object.assign(state.pull, { state: "open", merged: false, body: "Fixes #51" });
-    await syncPullReport(env, { pull: 60, number: 51 });
-    expect(status()).toEqual(["status: in progress"]);
+    expect(posts()).toBe(before);
+    expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
   });
 
   it("links only pull requests into nightly", async () => {
@@ -585,8 +551,7 @@ describe("status findings", () => {
     };
     rate({ pullRequest: "high", duplicate: "medium" });
     await apply();
-    expect(status()).toEqual(["status: in progress"]);
-    expect(state.issue.fixes[0]).toMatchObject({ number: 60, assessment: "in_progress" });
+    expect(state.pull.body).toBe("Fixes #51 (linked by the triage assessment)");
   });
 
   it("closes a duplicate rated high through the maintainer path, unless its original is closed as one", async () => {
@@ -659,6 +624,21 @@ describe("status findings", () => {
     await apply();
     expect(status()).toEqual(["status: needs info"]);
     expect(state.notes.get("needs_info")?.text).toBe("Set by the assessment.");
+  });
+
+  it("asks about an existing feature despite a tentative duplicate", async () => {
+    state.current.type = { name: "Feature" };
+    result.triage.kind = "feature";
+    rate({ existingFeature: "high", duplicate: "medium" });
+    Object.assign(result.triage, {
+      duplicateOf: 52,
+      duplicateConfidence: 0.8,
+      needsInformation: true,
+      questions: ["This already exists under Settings → Chat. Does it cover it?"],
+    });
+    refreshComment();
+    await apply();
+    expect(status()).toEqual(["status: needs info"]);
   });
 
   it("asks about an existing feature only within the question budget", async () => {

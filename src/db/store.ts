@@ -12,12 +12,6 @@ export interface FixRef {
   author?: string;
   state: "open" | "merged" | "closed";
   base?: string;
-  /**
-   * Set when the assessment linked this fix, not the fix itself: the status the
-   * link last gave the report. It moves the report only from that status, and a
-   * maintainer's status change rejects it.
-   */
-  assessment?: StatusId;
 }
 
 export interface TriageResult {
@@ -130,18 +124,6 @@ export async function getIssue(db: D1Database, number: number): Promise<IssueRec
 export async function listIssues(db: D1Database): Promise<IssueRecord[]> {
   const { results } = await db.prepare("SELECT * FROM issues ORDER BY number DESC").all<Row>();
   return results.map(toIssue);
-}
-
-/** Reports that record this pull request as a fix, whether or not it names them. */
-export async function issuesFixedByPull(db: D1Database, pull: number): Promise<number[]> {
-  const { results } = await db
-    .prepare(
-      `SELECT DISTINCT number FROM issues, json_each(issues.fixes_json) AS fix
-       WHERE json_extract(fix.value,'$.kind')='pr' AND json_extract(fix.value,'$.number')=?`,
-    )
-    .bind(pull)
-    .all<{ number: number }>();
-  return results.map((row) => row.number);
 }
 
 export async function saveIssue(db: D1Database, issue: IssueRecord): Promise<void> {

@@ -190,7 +190,9 @@ subscriptions. Third-party checks additionally require **Checks: read** and the
 **Check run** subscription; Greptile summaries require **Issue comment** and
 **Pull request review** subscriptions (with **Issues: read** and **Pull requests:
 read** permissions). The app repository’s agent workflows identify reports in their
-`run-name`; unrelated label-triggered runs are ignored.
+`run-name`; unrelated label-triggered runs are ignored. When an assessment finds
+an open pull request into nightly that fixes a report, the hub adds `Fixes #N` to
+its description, which needs **Pull requests: read and write**.
 
 Editing the report form: change `src/report/schema.ts`, then regenerate the
 GitHub issue forms in the app repository with

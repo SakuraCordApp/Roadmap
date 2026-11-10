@@ -7,7 +7,6 @@ import { constantTimeEqual, hmacSha256Hex } from "../util/crypto";
 import { json } from "../util/http";
 import { recordFeedEvent } from "./feed";
 import { commentAgentRun, identifyAgentRun } from "./agent-runs";
-import { rejectAssessmentFixes } from "../sync/activity";
 import { trackAgentRun } from "../sync/agents";
 import { agentCommentContent } from "../sync/comments";
 import { appBotLogin } from "./identity";
@@ -63,14 +62,6 @@ async function routeRepositoryEvent(
         await env.VECTORIZE.deleteByIds([String(number)]).catch(() => undefined);
         return;
       }
-      // A person changing the status on GitHub rejects what the assessment linked.
-      if (
-        sender !== bot &&
-        (["closed", "reopened"].includes(action ?? "") ||
-          (["labeled", "unlabeled"].includes(action ?? "") &&
-            payload.label?.name?.startsWith("status: ")))
-      )
-        await rejectAssessmentFixes(env, number);
       await enqueue(env, "sync-issue", String(number), {
         number,
         addedLabel: action === "labeled" && sender !== bot ? payload.label?.name : null,

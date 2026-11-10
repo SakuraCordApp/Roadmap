@@ -17,7 +17,6 @@ export type JobKind =
   | "discord-thread"
   | "ship"
   | "pull"
-  | "pull-report"
   | "push"
   | "release"
   | "milestones"

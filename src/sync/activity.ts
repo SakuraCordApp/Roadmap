@@ -11,7 +11,6 @@ import {
   addEvent,
   getIssue,
   getState,
-  issuesFixedByPull,
   listIssues,
   patchIssue,
   primaryThread,
@@ -26,7 +25,7 @@ import { GitHub } from "../github/client";
 import type { GhIssue, GhMilestone, GhPull } from "../github/types";
 import { labelNames } from "../github/types";
 import { enqueue, enqueueMany } from "../jobs/queue";
-import { deriveStatus, referencedIssues, statusGithubLabel } from "../lifecycle";
+import { referencedIssues, statusGithubLabel } from "../lifecycle";
 import { truncate } from "../util/text";
 import { NO_MIRROR } from "./markers";
 
@@ -72,7 +71,7 @@ export async function returnToTriage(env: Env, number: number): Promise<void> {
 async function setStatusLabel(
   env: Env,
   number: number,
-  status: "in_progress" | "in_nightly" | "confirmed" | "planned",
+  status: "in_progress" | "in_nightly" | "confirmed",
 ) {
   const github = new GitHub(env);
   const issue = await github.request<GhIssue>("GET", github.repo(`/issues/${number}`));
@@ -86,15 +85,7 @@ async function setStatusLabel(
   });
 }
 
-export async function onNightly(github: GitHub, sha: string): Promise<boolean> {
-  const comparison = await github.request<{ status: string }>(
-    "GET",
-    github.repo(`/compare/${sha}...${NIGHTLY_BRANCH}`),
-  );
-  return ["ahead", "identical"].includes(comparison.status);
-}
-
-export function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
+function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
   const key = (value: FixRef) => (value.kind === "pr" ? `pr:${value.number}` : `sha:${value.sha}`);
   const others = fixes.filter((value) => key(value) !== key(fix));
   // A PR's merge commit may also arrive as a pushed commit; keep the PR entry.
@@ -107,100 +98,60 @@ export function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
   return [...others, fix];
 }
 
-export function pullFixRef(pull: GhPull): FixRef {
-  return {
-    kind: "pr",
-    number: pull.number,
-    url: pull.html_url,
-    title: truncate(pull.title, 200),
-    author: pull.user?.login,
-    state: pull.merged ? "merged" : pull.state === "open" ? "open" : "closed",
-    base: pull.base.ref,
-    ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
-  };
-}
-
 export async function syncPull(env: Env, payload: { number: number }): Promise<void> {
   const github = new GitHub(env);
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.number}`));
   if (pull.base.ref === DEFAULT_BRANCH && pull.head.ref === NIGHTLY_BRANCH) return;
-  // The assessment can record a pull request that doesn't name the report.
-  const numbers = new Set([
-    ...referencedIssues(`${pull.title}\n${pull.body ?? ""}`),
-    ...(await issuesFixedByPull(env.DB, pull.number)),
-  ]);
-  // One job per report keeps a pull request with many reports inside the Worker limits.
-  await enqueueMany(
-    env,
-    [...numbers].map((number) => ({
-      kind: "pull-report" as const,
-      key: `${pull.number}:${number}`,
-      payload: { pull: pull.number, number },
-    })),
-  );
-}
-
-/** A maintainer's own status decision rejects the fixes the assessment linked. */
-export async function rejectAssessmentFixes(env: Env, number: number): Promise<void> {
-  const issue = await getIssue(env.DB, number);
-  if (issue?.fixes.some((fix) => fix.assessment))
-    await patchIssue(env.DB, number, { fixes: issue.fixes.filter((fix) => !fix.assessment) });
-}
-
-/** Move one report along with a pull request that fixes it, from its live GitHub status. */
-export async function syncPullReport(
-  env: Env,
-  payload: { pull: number; number: number },
-): Promise<void> {
-  const issue = await getIssue(env.DB, payload.number);
-  if (!issue?.kind) return;
-  const github = new GitHub(env);
-  const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.pull}`));
-  const named = referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number);
-  const link = issue.fixes.find(
-    (fix) => fix.kind === "pr" && fix.number === pull.number && fix.assessment,
-  );
-  if (!named && !link) return;
-  const current = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
-  const status = deriveStatus(current);
-  // The assessment's link acts only from the status it gave the report, so a
-  // maintainer's change wins, and records nothing, even before it rejects the link.
-  if (!named && status !== link!.assessment) return;
-  const { state } = pullFixRef(pull);
-  const others = issue.fixes.filter((fix) => !(fix.kind === "pr" && fix.number === pull.number));
-  let target: "in_progress" | "in_nightly" | "confirmed" | "planned" | null = null;
-  if (state === "open" && ["new", "needs_info", "confirmed", "planned"].includes(status))
-    target = "in_progress";
-  else if (
-    state === "merged" &&
-    STATUS_BY_ID.get(status)!.open &&
-    status !== "in_nightly" &&
-    (pull.base.ref === NIGHTLY_BRANCH || (await onNightly(github, pull.merge_commit_sha!)))
-  )
-    target = "in_nightly";
-  else if (
-    state === "closed" &&
-    status === "in_progress" &&
-    !others.some((fix) => fix.state !== "closed")
-  )
-    target = current.milestone ? "planned" : "confirmed";
-  // Record where the link puts the report before the label lands.
-  await patchIssue(env.DB, issue.number, {
-    fixes: upsertFix(issue.fixes, {
-      ...pullFixRef(pull),
-      ...(named ? {} : { assessment: target ?? link!.assessment }),
-    }),
-  });
-  if (target === "in_progress" || target === "in_nightly")
-    await addEvent(
-      env.DB,
-      issue.number,
-      "fix",
-      { pr: pull.number, url: pull.html_url, state },
-      pull.user?.login,
-    );
-  if (target) await setStatusLabel(env, issue.number, target);
-  else await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
+  const numbers = referencedIssues(`${pull.title}\n${pull.body ?? ""}`);
+  for (const number of numbers) {
+    const issue = (await getIssue(env.DB, number)) ?? null;
+    if (!issue?.kind) continue;
+    const state: FixRef["state"] = pull.merged
+      ? "merged"
+      : pull.state === "open"
+        ? "open"
+        : "closed";
+    const fixes = upsertFix(issue.fixes, {
+      kind: "pr",
+      number: pull.number,
+      url: pull.html_url,
+      title: truncate(pull.title, 200),
+      author: pull.user?.login,
+      state,
+      base: pull.base.ref,
+      ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
+    });
+    await patchIssue(env.DB, number, { fixes });
+    const open = STATUS_BY_ID.get(issue.status)!.open;
+    if (!open) continue;
+    if (state === "open" && ["new", "needs_info", "confirmed", "planned"].includes(issue.status)) {
+      await addEvent(
+        env.DB,
+        number,
+        "fix",
+        { pr: pull.number, url: pull.html_url, state },
+        pull.user?.login,
+      );
+      await setStatusLabel(env, number, "in_progress");
+    } else if (state === "merged" && issue.status !== "in_nightly") {
+      await addEvent(
+        env.DB,
+        number,
+        "fix",
+        { pr: pull.number, url: pull.html_url, state },
+        pull.user?.login,
+      );
+      await setStatusLabel(env, number, "in_nightly");
+    } else if (
+      state === "closed" &&
+      issue.status === "in_progress" &&
+      !fixes.some((fix) => fix.state !== "closed")
+    ) {
+      await setStatusLabel(env, number, "confirmed");
+    } else {
+      await enqueue(env, "sync-issue", String(number), { number });
+    }
+  }
 }
 
 export async function syncPush(
