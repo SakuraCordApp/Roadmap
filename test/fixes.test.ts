@@ -42,11 +42,6 @@ vi.mock("../src/db/store", () => ({
   patchIssue: async (_db: unknown, _number: number, patch: object) => {
     Object.assign(state.issue, patch);
   },
-  editFixes: async (_db: unknown, _number: number, edit: (current: any) => object | null) => {
-    const patch = edit({ shippedIn: null, shippedStableIn: null, ...state.issue });
-    if (patch) Object.assign(state.issue, patch);
-    return state.issue.fixes;
-  },
   setPendingNote: (...args: unknown[]) => state.note(...args),
   addEvent: vi.fn(),
   primaryThread: async () => null,

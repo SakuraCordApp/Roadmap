@@ -1,5 +1,5 @@
 import { NIGHTLY_BRANCH, REPOSITORY_SLUG, REPOSITORY_URL } from "./config";
-import { editFixes, getIssue, setPendingNote, type FixRef } from "./db/store";
+import { getIssue, patchIssue, setPendingNote, type FixRef, type IssueRecord } from "./db/store";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
 import type { GhIssue, GhPull, GhRelease } from "./github/types";
@@ -93,7 +93,7 @@ export async function markFixed(
     await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
       body: `${NO_MIRROR}\nA maintainer confirmed this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.${attribution}`,
     });
-    await recordNightlyFix(env, issue.number, fix);
+    await recordNightlyFix(env, issue, fix);
     if (note) await setPendingNote(env.DB, issue.number, "in_nightly", note, actor);
     await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
       labels: [
@@ -141,21 +141,21 @@ export async function nightlyFix(github: GitHub, reference: string): Promise<Fix
  * Record a fix on nightly as Mark as fixed does, replacing a shipment it
  * supersedes. Moving the report to In Nightly is the caller's.
  */
-export async function recordNightlyFix(env: Env, number: number, fix: FixRef): Promise<void> {
-  await editFixes(env.DB, number, (current) => ({
+export async function recordNightlyFix(env: Env, issue: IssueRecord, fix: FixRef): Promise<void> {
+  await patchIssue(env.DB, issue.number, {
     shippedIn: null,
     shippedStableIn: null,
-    fixes: current.shippedIn
+    fixes: issue.shippedIn
       ? [fix]
       : [
-          ...current.fixes.filter(
+          ...issue.fixes.filter(
             (existing) =>
               existing.sha !== fix.sha &&
               !(fix.kind === "pr" && existing.kind === "pr" && existing.number === fix.number),
           ),
           fix,
         ],
-  }));
+  });
 }
 
 /** Check each published release for a report's recorded fixes. */

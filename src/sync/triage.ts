@@ -403,7 +403,7 @@ export async function applyTriageResult(
   if (standing) {
     // Recorded as Mark as fixed records a fix.
     if (fix && decision!.to === "in_nightly") {
-      await recordNightlyFix(env, issue.number, fix);
+      await recordNightlyFix(env, (await getIssue(env.DB, issue.number))!, fix);
       if (!decision!.fixNote) {
         // The note carries the result's identity, so a retry finds one posted
         // before it could be recorded.

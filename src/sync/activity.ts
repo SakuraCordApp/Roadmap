@@ -9,10 +9,8 @@ import {
 } from "../config";
 import {
   addEvent,
-  editFixes,
   getIssue,
   getState,
-  issuesReferencedByPull,
   listIssues,
   patchIssue,
   primaryThread,
@@ -105,17 +103,6 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.number}`));
   if (pull.base.ref === DEFAULT_BRANCH && pull.head.ref === NIGHTLY_BRANCH) return;
   const numbers = referencedIssues(`${pull.title}\n${pull.body ?? ""}`);
-  // Reports the description stopped naming are unlinked one job each.
-  await enqueueMany(
-    env,
-    (await issuesReferencedByPull(env.DB, pull.number))
-      .filter((number) => !numbers.includes(number))
-      .map((number) => ({
-        kind: "pull-unlink" as const,
-        key: `${pull.number}:${number}`,
-        payload: { pull: pull.number, number },
-      })),
-  );
   for (const number of numbers) {
     const issue = (await getIssue(env.DB, number)) ?? null;
     if (!issue?.kind) continue;
@@ -124,7 +111,7 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
       : pull.state === "open"
         ? "open"
         : "closed";
-    const ref: FixRef = {
+    const fixes = upsertFix(issue.fixes, {
       kind: "pr",
       number: pull.number,
       url: pull.html_url,
@@ -133,10 +120,8 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
       state,
       base: pull.base.ref,
       ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
-    };
-    const fixes = (await editFixes(env.DB, number, (current) => ({
-      fixes: upsertFix(current.fixes, ref),
-    })))!;
+    });
+    await patchIssue(env.DB, number, { fixes });
     const open = STATUS_BY_ID.get(issue.status)!.open;
     if (!open) continue;
     if (state === "open" && ["new", "needs_info", "confirmed", "planned"].includes(issue.status)) {
@@ -169,36 +154,6 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
   }
 }
 
-/**
- * Drop a pull request as a report's fix once its description no longer names
- * the report, unless it was merged while it did. The report leaves In Progress
- * as it would if the pull request closed unmerged; that write comes first, so
- * a failed one is retried.
- */
-export async function unlinkPull(
-  env: Env,
-  payload: { pull: number; number: number },
-): Promise<void> {
-  const issue = await getIssue(env.DB, payload.number);
-  // Pull request sync marks the fix merged only if the pull request named the
-  // report when it merged; any other recorded state means it no longer counts.
-  const linked = (fix: FixRef) =>
-    fix.kind === "pr" && fix.number === payload.pull && fix.state !== "merged";
-  if (!issue?.fixes.some(linked)) return;
-  const github = new GitHub(env);
-  const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.pull}`));
-  if (referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number)) return;
-  if (
-    issue.status === "in_progress" &&
-    !issue.fixes.some((fix) => !linked(fix) && fix.state !== "closed")
-  )
-    await setStatusLabel(env, issue.number, "confirmed");
-  await editFixes(env.DB, issue.number, (current) =>
-    current.fixes.some(linked) ? { fixes: current.fixes.filter((fix) => !linked(fix)) } : null,
-  );
-  await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
-}
-
 export async function syncPush(
   env: Env,
   payload: { commits: Array<{ id: string; message: string; url: string; author?: string }> },
@@ -207,7 +162,7 @@ export async function syncPush(
     for (const number of referencedIssues(commit.message)) {
       const issue = await getIssue(env.DB, number);
       if (!issue?.kind) continue;
-      const ref: FixRef = {
+      const fixes = upsertFix(issue.fixes, {
         kind: "commit",
         sha: commit.id,
         url: commit.url,
@@ -215,8 +170,8 @@ export async function syncPush(
         author: commit.author,
         state: "merged",
         base: NIGHTLY_BRANCH,
-      };
-      await editFixes(env.DB, number, (current) => ({ fixes: upsertFix(current.fixes, ref) }));
+      });
+      await patchIssue(env.DB, number, { fixes });
       if (STATUS_BY_ID.get(issue.status)!.open && issue.status !== "in_nightly") {
         await addEvent(
           env.DB,
