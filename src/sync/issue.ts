@@ -170,6 +170,14 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
   ) {
     await enqueue(env, "milestones", "all", {}, 5);
   }
+  // The assessment card's outcome follows the synced status, which can land
+  // after the card last refreshed.
+  if (previous && previous.status !== record.status) {
+    await enqueue(env, "agent-status", `${record.number}:investigate`, {
+      number: record.number,
+      kind: "investigate",
+    });
+  }
 }
 
 /** Move followers of a duplicate to the canonical report and tell both threads. */
