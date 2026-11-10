@@ -70,6 +70,8 @@ const ephemeral = (content: string, extra: Record<string, unknown> = {}) =>
   json({ type: 4, data: { content, flags: EPHEMERAL, allowed_mentions: noMentions, ...extra } });
 /** Components V2 messages can't go back to plain content, so their updates stay V2. */
 const notice = (content: string) => ({
+  // Converting a legacy message (such as the Manage menu) requires clearing its content.
+  content: null,
   flags: EPHEMERAL | COMPONENTS_V2,
   allowed_mentions: noMentions,
   components: [{ type: 10, content }],
