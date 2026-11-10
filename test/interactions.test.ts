@@ -88,13 +88,11 @@ describe("immediate Manage actions", () => {
     mocks.sync.mockResolvedValue({ status: "pending", last_error: "Discord unavailable" });
     const { tasks } = await submit();
     await Promise.all(tasks);
-    expect(mocks.reply).toHaveBeenCalledWith(
-      "test-interaction",
-      expect.objectContaining({
-        content: expect.stringContaining("Saved on GitHub, but Discord has not finished updating"),
-      }),
+    const reply = mocks.reply.mock.calls[0]![1];
+    expect(reply.components[0].content).toContain(
+      "Saved on GitHub, but Discord has not finished updating",
     );
-    expect(mocks.reply.mock.calls[0]![1].content).not.toContain("✅");
+    expect(reply.components[0].content).not.toContain("✅");
   });
 
   it("does not mutate or sync reports for an unauthorized modal submission", async () => {
