@@ -74,9 +74,10 @@ function assessmentOutcome(
   issue: IssueRecord | null,
   appliedAt: string | null,
   run: WorkflowRun,
-): string {
-  if (!issue || !appliedAt || Date.parse(appliedAt) < Date.parse(run.run_started_at))
-    return "⏳ Updating the report…";
+): string | undefined {
+  // No marker: nothing applied since this was introduced, so claim nothing.
+  if (!issue || !appliedAt) return undefined;
+  if (Date.parse(appliedAt) < Date.parse(run.run_started_at)) return "⏳ Updating the report…";
   switch (issue.status) {
     case "needs_info":
       return "❓ Waiting for answers to the questions below";
