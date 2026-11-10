@@ -224,13 +224,18 @@ export function statusMessageText(input: StatusMessageInput): string {
   let text: string;
   switch (issue.status) {
     case "new":
-      text = reopened
-        ? "🔄 **Reopened.** The team will take another look."
-        : input.previous !== "needs_info"
-          ? "🌱 **Back in triage.**"
+      if (reopened) {
+        text = "🔄 **Reopened.** The team will take another look.";
+        break;
+      }
+      // An answer reruns the assessment until its budget is spent (triagedAt kept).
+      text = `🌱 **Back in triage.**${
+        input.previous !== "needs_info"
+          ? ""
           : issue.triagedAt
-            ? "🌱 **Back in triage.** Thanks for the details. A maintainer will review them."
-            : "🌱 **Back in triage.** Thanks for the details. The assessment is running again with them.";
+            ? " Thanks for the details. A maintainer will review them."
+            : " Thanks for the details. The assessment is running again with them."
+      }`;
       break;
     case "needs_info": {
       const questions = issue.triage?.needsInformation ? issue.triage.questions : [];

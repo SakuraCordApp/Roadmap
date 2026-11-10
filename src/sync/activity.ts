@@ -33,11 +33,15 @@ import { NO_MIRROR } from "./markers";
  * Answers restart the automated assessment at most this many times, and the
  * last of those runs asks nothing more. Later answers wait for a maintainer.
  */
-export const ANSWER_REASSESSMENTS = 2;
+const ANSWER_REASSESSMENTS = 2;
 const answerRunsKey = (number: number) => `triage:answer-runs:${number}`;
 
-export async function answerReassessments(env: Env, number: number): Promise<number> {
+async function answerReassessments(env: Env, number: number): Promise<number> {
   return Number((await getState(env.DB, answerRunsKey(number))) ?? 0);
+}
+
+export async function questionsAllowed(env: Env, number: number): Promise<boolean> {
+  return (await answerReassessments(env, number)) < ANSWER_REASSESSMENTS;
 }
 
 /** A maintainer's deliberate rerun starts a fresh question allowance. */
