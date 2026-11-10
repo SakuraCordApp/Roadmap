@@ -72,7 +72,7 @@ export async function returnToTriage(env: Env, number: number): Promise<void> {
 async function setStatusLabel(
   env: Env,
   number: number,
-  status: "in_progress" | "in_nightly" | "confirmed",
+  status: "in_progress" | "in_nightly" | "confirmed" | "planned",
 ) {
   const github = new GitHub(env);
   const issue = await github.request<GhIssue>("GET", github.repo(`/issues/${number}`));
@@ -140,6 +140,13 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
   );
 }
 
+/** A maintainer's own status decision rejects the fixes the assessment linked. */
+export async function rejectAssessmentFixes(env: Env, number: number): Promise<void> {
+  const issue = await getIssue(env.DB, number);
+  if (issue?.fixes.some((fix) => fix.assessment))
+    await patchIssue(env.DB, number, { fixes: issue.fixes.filter((fix) => !fix.assessment) });
+}
+
 /** Move one report along with a pull request that fixes it, from its live GitHub status. */
 export async function syncPullReport(
   env: Env,
@@ -149,32 +156,42 @@ export async function syncPullReport(
   if (!issue?.kind) return;
   const github = new GitHub(env);
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.pull}`));
-  const ref = pullFixRef(pull);
-  const state = ref.state;
-  const fixes = upsertFix(issue.fixes, ref);
-  await patchIssue(env.DB, issue.number, { fixes });
+  const named = referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number);
+  const link = issue.fixes.find(
+    (fix) => fix.kind === "pr" && fix.number === pull.number && fix.assessment,
+  );
+  if (!named && !link) return;
   const current = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
   const status = deriveStatus(current);
-  // A pull request the assessment linked moved the report once; after that it
-  // only follows a report that is still In Progress, so a maintainer's
-  // correction stays.
-  const named = referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number);
-  if (state === "open" && named && ["new", "needs_info", "confirmed", "planned"].includes(status)) {
-    await addEvent(
-      env.DB,
-      issue.number,
-      "fix",
-      { pr: pull.number, url: pull.html_url, state },
-      pull.user?.login,
-    );
-    await setStatusLabel(env, issue.number, "in_progress");
-  } else if (
+  // The assessment's link acts only from the status it gave the report, so a
+  // maintainer's change wins, and records nothing, even before it rejects the link.
+  if (!named && status !== link!.assessment) return;
+  const { state } = pullFixRef(pull);
+  const others = issue.fixes.filter((fix) => !(fix.kind === "pr" && fix.number === pull.number));
+  let target: "in_progress" | "in_nightly" | "confirmed" | "planned" | null = null;
+  if (state === "open" && ["new", "needs_info", "confirmed", "planned"].includes(status))
+    target = "in_progress";
+  else if (
     state === "merged" &&
     STATUS_BY_ID.get(status)!.open &&
     status !== "in_nightly" &&
-    (named || status === "in_progress") &&
     (pull.base.ref === NIGHTLY_BRANCH || (await onNightly(github, pull.merge_commit_sha!)))
-  ) {
+  )
+    target = "in_nightly";
+  else if (
+    state === "closed" &&
+    status === "in_progress" &&
+    !others.some((fix) => fix.state !== "closed")
+  )
+    target = current.milestone ? "planned" : "confirmed";
+  // Record where the link puts the report before the label lands.
+  await patchIssue(env.DB, issue.number, {
+    fixes: upsertFix(issue.fixes, {
+      ...pullFixRef(pull),
+      ...(named ? {} : { assessment: target ?? link!.assessment }),
+    }),
+  });
+  if (target === "in_progress" || target === "in_nightly")
     await addEvent(
       env.DB,
       issue.number,
@@ -182,16 +199,8 @@ export async function syncPullReport(
       { pr: pull.number, url: pull.html_url, state },
       pull.user?.login,
     );
-    await setStatusLabel(env, issue.number, "in_nightly");
-  } else if (
-    state === "closed" &&
-    status === "in_progress" &&
-    !fixes.some((fix) => fix.state !== "closed")
-  ) {
-    await setStatusLabel(env, issue.number, "confirmed");
-  } else {
-    await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
-  }
+  if (target) await setStatusLabel(env, issue.number, target);
+  else await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
 }
 
 export async function syncPush(

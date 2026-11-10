@@ -1,4 +1,4 @@
-import { closeAsDuplicate } from "../actions";
+import { duplicateClosure } from "../actions";
 import { searchReports } from "../ai/search";
 import {
   checkReportVersion,
@@ -180,13 +180,13 @@ export async function applyTriageResult(
   if ((await getState(env.DB, key)) === hash) return;
   const issue = await getIssue(env.DB, payload.number);
   if (!issue) throw new Error(`Report #${payload.number} has not synced yet`);
-  const current = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
-  const labels = new Set(labelNames(current));
+  const issuePath = github.repo(`/issues/${issue.number}`);
+  const first = await github.request<GhIssue>("GET", issuePath);
   const result = { ...envelope.triage, model: envelope.model };
   // A report edited while the agent was working needs a fresh assessment.
   // Leave manual title edits alone; compare the body separately for retries.
-  if ((await sha256(current.body ?? "")) !== envelope.bodyHash) {
-    if (labels.has(AGENT_LABELS.investigate.name))
+  if ((await sha256(first.body ?? "")) !== envelope.bodyHash) {
+    if (labelNames(first).includes(AGENT_LABELS.investigate.name))
       await github.request(
         "DELETE",
         github.repo(
@@ -201,30 +201,42 @@ export async function applyTriageResult(
   // these ratings applied a fix at high overall confidence, and always their kind.
   const findings = envelope.findings;
   const sure = (finding: keyof NonNullable<typeof findings>) => findings?.[finding] === "high";
-  const status = deriveStatus(current);
-  const inTriage = inTriageStatus(status);
+  const status = deriveStatus(first);
+  const open = first.state === "open";
   // Confirmed and planned reports may still move forward on verified progress.
   const advancing =
-    inTriage || (Boolean(findings) && (status === "confirmed" || status === "planned"));
+    inTriageStatus(status) ||
+    (Boolean(findings) && (status === "confirmed" || status === "planned"));
   const resolution = result.resolution;
-  const progress = current.state === "open" && !result.needsInformation && !result.duplicateOf;
-  const confirmedFix =
+  const foundDuplicate =
+    open && inTriageStatus(status) && sure("duplicate") && result.duplicateOf
+      ? await duplicateTarget(github, result.duplicateOf)
+      : null;
+  // Only an accepted duplicate holds back progress; results without ratings
+  // keep their rule that any suggested duplicate does.
+  const progress =
+    open && !result.needsInformation && (findings ? !foundDuplicate : !result.duplicateOf);
+  const foundFix =
     progress &&
     (findings ? sure("fix") : envelope.confidence === "high") &&
     resolution?.commit &&
     FIXED_STATES.includes(resolution.state) &&
-    ((labels.has(statusGithubLabel("in_nightly")!) &&
+    ((status === "in_nightly" &&
       issue.triage?.resolution?.commit === resolution.commit &&
       issue.fixes.some((fix) => fix.sha === resolution.commit)) ||
       (advancing && (await onNightly(github, resolution.commit))));
-  const pull =
-    progress && advancing && !confirmedFix && sure("pullRequest") && resolution?.pullRequest
+  const foundPull =
+    progress && advancing && !foundFix && sure("pullRequest") && resolution?.pullRequest
       ? await openPull(github, resolution.pullRequest)
       : null;
-  const duplicate =
-    current.state === "open" && inTriage && sure("duplicate") && result.duplicateOf
-      ? await duplicateTarget(github, result.duplicateOf)
-      : null;
+  // The lookups take a while. Every write below starts from a fresh read, and
+  // a status a maintainer set meanwhile cancels all automatic status changes.
+  const current = await github.request<GhIssue>("GET", issuePath);
+  const unchanged = current.state === first.state && deriveStatus(current) === status;
+  const inTriage = unchanged && inTriageStatus(status);
+  const confirmedFix = unchanged && foundFix;
+  const pull = unchanged ? foundPull : null;
+  const duplicate = unchanged ? foundDuplicate : null;
   const regression = sure("fix") && resolution?.state === "possible_regression";
   const reportedKind = issueKind(current);
   // A duplicate keeps its kind, so closing it doesn't move its Discord post.
@@ -232,10 +244,12 @@ export async function applyTriageResult(
     !reportedKind || (!duplicate && (!findings || sure("kind"))) ? result.kind : reportedKind;
   // Cache before removing the trigger label, so its webhook cannot start a
   // second run. Result retries still apply GitHub changes if that write failed.
+  // Fixes the assessment links carry the status they give the report.
   await patchIssue(env.DB, issue.number, {
     summary: result.summary,
     triage: result,
     triagedAt: nowIso(),
+    ...(duplicate ? { duplicateOf: duplicate.number } : {}),
     ...(confirmedFix
       ? {
           fixes: [
@@ -245,13 +259,15 @@ export async function applyTriageResult(
               sha: resolution!.commit!,
               url: `${REPOSITORY_URL}/commit/${resolution!.commit}`,
               state: "merged" as const,
+              assessment: "in_nightly" as const,
             },
           ],
         }
       : pull
-        ? { fixes: upsertFix(issue.fixes, pullFixRef(pull)) }
+        ? { fixes: upsertFix(issue.fixes, { ...pullFixRef(pull), assessment: "in_progress" }) }
         : {}),
   });
+  const labels = new Set(labelNames(current));
   labels.delete(AGENT_LABELS.investigate.name);
   const patch: Record<string, unknown> = {};
   if (current.state === "open") {
@@ -271,19 +287,19 @@ export async function applyTriageResult(
         (await questionsAllowed(env, issue.number));
       next = duplicate ? null : ask ? "needs_info" : (next ?? (regression ? "confirmed" : "new"));
     }
-    if (next) {
+    if (next || duplicate)
       for (const name of [...labels]) if (name.startsWith("status: ")) labels.delete(name);
-      labels.add(statusGithubLabel(next)!);
-    }
-    // A duplicate's note is set once the report is known to still be in triage.
+    if (next) labels.add(statusGithubLabel(next)!);
+    if (duplicate) Object.assign(patch, duplicateClosure(duplicate));
+    const changed = duplicate ? "duplicate" : next !== status && next !== "new" ? next : null;
     await setAssessmentNote(
       env.DB,
       issue.number,
-      next && next !== status && next !== "new"
+      changed
         ? {
-            status: next,
+            status: changed,
             text:
-              next === "confirmed"
+              changed === "confirmed"
                 ? `Set by the assessment: the reported release already has the fix from ${resolution!.commit!.slice(0, 7)}, so this broke again.`
                 : "Set by the assessment.",
             author: ASSESSMENT,
@@ -305,19 +321,7 @@ export async function applyTriageResult(
       patch.title = result.title;
   }
   patch.labels = [...labels];
-  await github.request("PATCH", github.repo(`/issues/${issue.number}`), patch);
-  if (duplicate) {
-    // A maintainer may have decided since this result was read.
-    const fresh = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
-    if (fresh.state === "open" && inTriageStatus(deriveStatus(fresh))) {
-      await setAssessmentNote(env.DB, issue.number, {
-        status: "duplicate",
-        text: "Set by the assessment.",
-        author: ASSESSMENT,
-      });
-      await closeAsDuplicate(env, fresh, duplicate);
-    }
-  }
+  await github.request("PATCH", issuePath, patch);
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
   // The pull request may have closed before the report showed In Progress.
   if (pull)

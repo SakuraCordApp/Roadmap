@@ -2,6 +2,7 @@ import { indexIssue } from "../ai/embeddings";
 import { STATUS_BY_ID } from "../config";
 import {
   addEvent,
+  dropAssessmentNote,
   getIssue,
   moveSubscribers,
   patchIssue,
@@ -139,6 +140,7 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     // that failed. GitHub-filed reports get one as soon as they have a type.
     createIfMissing: !createdByHub || age > 10 * 60_000,
   });
+  await dropAssessmentNote(env.DB, record.number);
 
   if (projection.created && record.commentsCount > 0) {
     // A GitHub-filed issue just got its Discord post: bring the conversation over.

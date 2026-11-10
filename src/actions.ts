@@ -1,7 +1,7 @@
 import { markFixed } from "./fixes";
 import { AGENT_LABELS, STATUS_BY_ID, type StatusId } from "./config";
 import { getIssue, patchIssue, setPendingNote } from "./db/store";
-import { resetAnswerReassessments } from "./sync/activity";
+import { rejectAssessmentFixes, resetAnswerReassessments } from "./sync/activity";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
 import { labelNames, type GhIssue, type GhMilestone } from "./github/types";
@@ -152,17 +152,15 @@ const exclusive = (labels: string[], status: StatusId) => [
   statusGithubLabel(status)!,
 ];
 
-/** Close a report into its original; the sync job then moves its followers. */
-export async function closeAsDuplicate(env: Env, issue: GhIssue, original: GhIssue) {
-  const github = new GitHub(env);
-  await patchIssue(env.DB, issue.number, { duplicateOf: original.number });
-  await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
-    state: "closed",
-    state_reason: "duplicate",
-    duplicate_issue_id: original.id,
-    labels: labelNames(issue).filter((name) => !name.startsWith("status: ")),
-  });
-}
+/** Closes a report into its original; the sync job then moves its followers. */
+export const duplicateClosure = (original: GhIssue) => ({
+  state: "closed",
+  state_reason: "duplicate",
+  duplicate_issue_id: original.id,
+});
+
+/** Actions that don't decide the report's status, so the assessment's links stand. */
+const NOT_STATUS_DECISIONS: ReadonlySet<MaintainerAction> = new Set(["plan", "investigate", "fix"]);
 
 /** Apply a maintainer action on GitHub. Discord follows via the sync job. */
 export async function performAction(
@@ -239,7 +237,11 @@ export async function performAction(
       const target = Number((note ?? "").replace(/[^\d]/g, ""));
       if (!target || target === number) throw new Error("Enter the number of the original report.");
       const original = await github.request<GhIssue>("GET", github.repo(`/issues/${target}`));
-      await closeAsDuplicate(env, issue, original);
+      await patchIssue(env.DB, number, { duplicateOf: target });
+      await github.request("PATCH", path, {
+        ...duplicateClosure(original),
+        labels: labels.filter((name) => !name.startsWith("status: ")),
+      });
       message = `Closed as a duplicate of #${target}.`;
       break;
     }
@@ -294,6 +296,7 @@ export async function performAction(
       message = "The fix agent is starting. It will open a draft pull request when it's done.";
       break;
   }
+  if (!NOT_STATUS_DECISIONS.has(action)) await rejectAssessmentFixes(env, number);
   await enqueue(env, "sync-issue", String(number), { number });
   return message;
 }

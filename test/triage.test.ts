@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTriageResult, TRIAGE_MARKER } from "../src/ai/triage";
-import { returnToTriage, syncPull, syncPullReport } from "../src/sync/activity";
+import { performAction } from "../src/actions";
+import {
+  rejectAssessmentFixes,
+  returnToTriage,
+  syncPull,
+  syncPullReport,
+} from "../src/sync/activity";
 import { applyTriageResult, runTriage } from "../src/sync/triage";
 import { sha256 } from "../src/util/crypto";
 import type { Env } from "../src/env";
@@ -12,7 +18,7 @@ const state = vi.hoisted(() => ({
   target: {} as any,
   pull: {} as any,
   compare: "ahead",
-  afterPatch: undefined as (() => void) | undefined,
+  duringLookup: undefined as (() => void) | undefined,
   linked: [] as number[],
   values: new Map<string, string>(),
   notes: new Map<string, { text: string; author: string }>(),
@@ -47,6 +53,7 @@ vi.mock("../src/db/store", () => ({
   },
   issuesFixedByPull: async () => state.linked,
   addEvent: async () => undefined,
+  setPendingNote: async () => undefined,
 }));
 vi.mock("../src/jobs/queue", () => ({
   enqueue: (...args: unknown[]) => state.enqueue(...args),
@@ -116,7 +123,7 @@ beforeEach(async () => {
     },
   };
   state.comment = { id: 10, user: { login: "github-actions[bot]", type: "Bot" } };
-  state.afterPatch = undefined;
+  state.duringLookup = undefined;
   refreshComment();
   state.request.mockImplementation(async (method: string, path: string, body?: any) => {
     if (path.endsWith("/releases/latest"))
@@ -128,14 +135,13 @@ beforeEach(async () => {
         html_url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v0.1.6",
       };
     if (path.includes("/releases?")) return [];
+    if (["/compare/", "/pulls/", "/issues/52"].some((prefix) => path.startsWith(prefix)))
+      state.duringLookup?.();
     if (path.startsWith("/compare/")) return { status: state.compare };
     if (path.startsWith("/pulls/")) return state.pull;
     if (path === "/issues/52") return state.target;
     if (method === "GET") return path.includes("/comments/") ? state.comment : state.current;
-    if (method === "PATCH") {
-      Object.assign(state.current, body);
-      state.afterPatch?.();
-    }
+    if (method === "PATCH") Object.assign(state.current, body);
     if (method === "POST" && body.labels) state.current.labels.push(...body.labels);
     if (method === "DELETE")
       state.current.labels = state.current.labels.filter(
@@ -458,15 +464,17 @@ describe("status findings", () => {
     expect(status()).toEqual(["status: confirmed"]);
   });
 
+  const linkedPull = (assessment: string) => {
+    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "open", assessment }];
+    state.current.labels = [`status: ${assessment.replace("_", " ")}`];
+  };
+  const merge = () =>
+    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+
   it("moves a report to In Nightly only when its pull request landed on nightly", async () => {
-    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "open" }];
-    state.current.labels = ["status: in progress"];
-    Object.assign(state.pull, {
-      state: "closed",
-      merged: true,
-      merge_commit_sha: sha,
-      base: { ref: "feature/composer" },
-    });
+    linkedPull("in_progress");
+    merge();
+    state.pull.base = { ref: "feature/composer" };
     state.compare = "diverged";
     await syncPullReport(env, { pull: 60, number: 51 });
     expect(status()).toEqual(["status: in progress"]);
@@ -476,14 +484,41 @@ describe("status findings", () => {
     expect(status()).toEqual(["status: in nightly"]);
   });
 
-  it("does not undo a maintainer's correction of a linked pull request", async () => {
-    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "open" }];
+  it("keeps tracking a linked pull request through its own close and reopen", async () => {
+    linkedPull("in_progress");
+    state.pull.state = "closed";
+    await syncPullReport(env, { pull: 60, number: 51 });
+    expect(status()).toEqual(["status: confirmed"]);
+    state.pull.state = "open";
+    await syncPullReport(env, { pull: 60, number: 51 });
+    expect(status()).toEqual(["status: in progress"]);
+    merge();
+    await syncPullReport(env, { pull: 60, number: 51 });
+    expect(status()).toEqual(["status: in nightly"]);
+  });
+
+  it("lets a maintainer reject a linked pull request so it never ships the report", async () => {
+    // On GitHub: the status changes before its webhook rejects the link.
+    linkedPull("in_progress");
     state.current.labels = ["status: confirmed"];
+    merge();
     await syncPullReport(env, { pull: 60, number: 51 });
     expect(status()).toEqual(["status: confirmed"]);
-    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+    expect(state.issue.fixes.some((fix: any) => fix.sha)).toBe(false);
+    await rejectAssessmentFixes(env, 51);
+    expect(state.issue.fixes).toEqual([]);
+
+    // In Discord's Manage menu.
+    linkedPull("in_progress");
+    state.pull.merged = false;
+    state.pull.state = "open";
+    await performAction(env, 51, "confirm", "maintainer");
+    expect(state.issue.fixes).toEqual([]);
+    merge();
     await syncPullReport(env, { pull: 60, number: 51 });
     expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+
     // A pull request that names the report still moves it, as before.
     Object.assign(state.pull, { state: "open", merged: false, body: "Fixes #51" });
     await syncPullReport(env, { pull: 60, number: 51 });
@@ -505,17 +540,53 @@ describe("status findings", () => {
     expect(state.issue.fixes).toEqual([]);
   });
 
-  it("does not close a duplicate once a maintainer has moved the report on", async () => {
+  for (const maintainer of ["confirmed", "in progress"])
+    it(`leaves a status a maintainer sets during the lookups (${maintainer})`, async () => {
+      fixedOnNightly();
+      result.triage.duplicateOf = 52;
+      rate({ fix: "high", duplicate: "high" });
+      state.duringLookup = () => {
+        state.current.labels = [`status: ${maintainer}`, "agent: investigate"];
+      };
+      await apply();
+      expect(state.current.state).toBe("open");
+      expect(status()).toEqual([`status: ${maintainer}`]);
+      expect(state.current.labels).not.toContain("agent: investigate");
+      expect(state.issue.fixes).toEqual([]);
+      expect(state.notes.size).toBe(0);
+
+      // Without the duplicate, the fix lookup is the slow part.
+      state.values.clear();
+      state.current.labels = ["status: new", "agent: investigate"];
+      result.triage.duplicateOf = null;
+      refreshComment();
+      await apply();
+      expect(status()).toEqual([`status: ${maintainer}`]);
+      expect(state.issue.fixes).toEqual([]);
+    });
+
+  it("applies a high fix or pull request despite a tentative duplicate", async () => {
+    fixedOnNightly();
     result.triage.duplicateOf = 52;
-    result.triage.duplicateConfidence = 0.95;
-    rate({ duplicate: "high" });
-    state.afterPatch = () => {
-      state.current.labels = ["status: in progress"];
-    };
+    result.triage.duplicateConfidence = 0.6;
+    rate({ fix: "high", duplicate: "medium" });
     await apply();
-    expect(state.current.state).toBe("open");
+    expect(status()).toEqual(["status: in nightly"]);
+
+    state.values.clear();
+    state.issue.fixes = [];
+    state.current.labels = ["status: new", "agent: investigate"];
+    result.triage.resolution = {
+      state: "unresolved",
+      commit: null,
+      releaseTag: null,
+      pullRequest: 60,
+      explanation: "",
+    };
+    rate({ pullRequest: "high", duplicate: "medium" });
+    await apply();
     expect(status()).toEqual(["status: in progress"]);
-    expect(state.notes.size).toBe(0);
+    expect(state.issue.fixes[0]).toMatchObject({ number: 60, assessment: "in_progress" });
   });
 
   it("closes a duplicate rated high through the maintainer path, unless its original is closed as one", async () => {
