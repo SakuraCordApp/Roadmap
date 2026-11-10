@@ -217,4 +217,15 @@ describe("maintainer fix confirmation", () => {
     expect(state.request).not.toHaveBeenCalled();
     expect(state.issue.shippedIn).toBeNull();
   });
+  it("leaves a report declined on GitHub before the cache caught up", async () => {
+    await performAction(env, 51, "mark_fixed", "maintainer", {
+      release: "unreleased",
+      reference: sha,
+    });
+    state.current.state = "closed";
+    state.current.state_reason = "not_planned";
+    await shipIssue(env, { number: 51, tag: nightly.tag, url: nightly.url });
+    expect(state.current.state_reason).toBe("not_planned");
+    expect(state.issue.shippedIn).toBeNull();
+  });
 });

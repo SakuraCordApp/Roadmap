@@ -241,6 +241,8 @@ export async function recordShipment(
     !issue.shippedIn || issue.state === "open"
       ? await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`))
       : null;
+  // The cache can lag behind a resolution a maintainer already made on GitHub.
+  if (!confirmation && current?.state === "closed" && current.state_reason !== "completed") return;
   if (!issue.shippedIn || current?.state === "open") {
     let milestone: number | undefined;
     if (!current!.milestone) {
