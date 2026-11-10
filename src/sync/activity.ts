@@ -11,7 +11,7 @@ import {
   addEvent,
   getIssue,
   getState,
-  issuesFixedByPull,
+  issuesReferencedByPull,
   listIssues,
   patchIssue,
   primaryThread,
@@ -104,17 +104,17 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.number}`));
   if (pull.base.ref === DEFAULT_BRANCH && pull.head.ref === NIGHTLY_BRANCH) return;
   const numbers = referencedIssues(`${pull.title}\n${pull.body ?? ""}`);
-  // A report the description no longer names loses the pull request as a fix,
-  // and leaves In Progress as it would if the pull request closed unmerged.
-  for (const number of await issuesFixedByPull(env.DB, pull.number)) {
-    if (numbers.includes(number)) continue;
-    const issue = (await getIssue(env.DB, number))!;
-    const fixes = issue.fixes.filter((fix) => !(fix.kind === "pr" && fix.number === pull.number));
-    await patchIssue(env.DB, number, { fixes });
-    if (issue.status === "in_progress" && !fixes.some((fix) => fix.state !== "closed"))
-      await setStatusLabel(env, number, "confirmed");
-    else await enqueue(env, "sync-issue", String(number), { number });
-  }
+  // Reports the description stopped naming are unlinked one job each.
+  await enqueueMany(
+    env,
+    (await issuesReferencedByPull(env.DB, pull.number))
+      .filter((number) => !numbers.includes(number))
+      .map((number) => ({
+        kind: "pull-unlink" as const,
+        key: `${pull.number}:${number}`,
+        payload: { pull: pull.number, number },
+      })),
+  );
   for (const number of numbers) {
     const issue = (await getIssue(env.DB, number)) ?? null;
     if (!issue?.kind) continue;
@@ -132,6 +132,7 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
       state,
       base: pull.base.ref,
       ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
+      named: true,
     });
     await patchIssue(env.DB, number, { fixes });
     const open = STATUS_BY_ID.get(issue.status)!.open;
@@ -164,6 +165,31 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
       await enqueue(env, "sync-issue", String(number), { number });
     }
   }
+}
+
+/**
+ * Drop an unmerged pull request's closing reference that its description no
+ * longer contains, and leave In Progress as a pull request closed unmerged
+ * would. The status changes first, so a failed write is retried.
+ */
+export async function unlinkPull(
+  env: Env,
+  payload: { pull: number; number: number },
+): Promise<void> {
+  const issue = await getIssue(env.DB, payload.number);
+  const linked = (fix: FixRef) =>
+    fix.kind === "pr" && fix.number === payload.pull && fix.named && fix.state !== "merged";
+  if (!issue?.fixes.some(linked)) return;
+  const github = new GitHub(env);
+  const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.pull}`));
+  // A merged pull request may still have named the report when it merged.
+  if (pull.merged || referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number))
+    return;
+  const fixes = issue.fixes.filter((fix) => !linked(fix));
+  if (issue.status === "in_progress" && !fixes.some((fix) => fix.state !== "closed"))
+    await setStatusLabel(env, issue.number, "confirmed");
+  await patchIssue(env.DB, issue.number, { fixes });
+  await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
 }
 
 export async function syncPush(

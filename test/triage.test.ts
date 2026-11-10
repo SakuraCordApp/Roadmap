@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTriageResult, TRIAGE_MARKER } from "../src/ai/triage";
-import { returnToTriage, syncPull } from "../src/sync/activity";
+import { handleRelease, returnToTriage, syncPull, unlinkPull } from "../src/sync/activity";
 import { applyTriageResult, runTriage } from "../src/sync/triage";
 import { sha256 } from "../src/util/crypto";
 import type { Env } from "../src/env";
@@ -13,6 +13,8 @@ const state = vi.hoisted(() => ({
   pull: {} as any,
   compare: "ahead",
   fixedBy: [] as number[],
+  d1: 0,
+  failSave: undefined as ((key: string, value: string) => void) | undefined,
   duringLookup: undefined as (() => void) | undefined,
   values: new Map<string, string>(),
   notes: new Map<string, { text: string; author: string }>(),
@@ -31,14 +33,17 @@ vi.mock("../src/github/client", () => ({
 }));
 vi.mock("../src/github/identity", () => ({ appBotLogin: async () => "sakuracord-bot[bot]" }));
 vi.mock("../src/db/store", () => ({
-  getIssue: async () => state.issue,
+  getIssue: async () => (state.d1++, state.issue),
+  listIssues: async () => [state.issue],
   getJsonState: async (_db: unknown, key: string, fallback: unknown) =>
     state.values.has(key) ? JSON.parse(state.values.get(key)!) : fallback,
   getState: async (_db: unknown, key: string) => state.values.get(key) ?? null,
   setState: async (_db: unknown, key: string, value: string) => {
+    state.failSave?.(key, value);
     state.values.set(key, value);
   },
   patchIssue: async (_db: unknown, _number: number, patch: object) => {
+    state.d1++;
     Object.assign(state.issue, patch);
   },
   setAssessmentNote: async (_db: unknown, _number: number, note: any) => {
@@ -46,12 +51,13 @@ vi.mock("../src/db/store", () => ({
     if (note) state.notes.set(note.status, { text: note.text, author: note.author });
   },
   addEvent: async () => undefined,
-  issuesFixedByPull: async () => state.fixedBy,
+  issuesReferencedByPull: async () => (state.d1++, state.fixedBy),
   setPendingNote: async () => undefined,
 }));
 vi.mock("../src/jobs/queue", () => ({
-  enqueue: (...args: unknown[]) => state.enqueue(...args),
+  enqueue: (...args: unknown[]) => (state.d1++, state.enqueue(...args)),
   enqueueMany: async (env: Env, jobs: any[]) => {
+    state.d1++;
     for (const job of jobs) await state.enqueue(env, job.kind, job.key, job.payload);
   },
 }));
@@ -68,6 +74,7 @@ beforeEach(async () => {
   state.notes.clear();
   state.compare = "ahead";
   state.fixedBy = [];
+  state.failSave = undefined;
   state.target = { number: 52, state: "open", state_reason: null, labels: ["status: confirmed"] };
   state.pull = {
     number: 60,
@@ -456,12 +463,57 @@ describe("status findings", () => {
     state.pull.body = "Fixes #51";
     await syncPull(env, { number: 60 });
     expect(status()).toEqual(["status: in progress"]);
+    expect(state.issue.fixes[0]).toMatchObject({ number: 60, state: "open", named: true });
     state.issue.status = "in_progress";
     state.fixedBy = [51];
     state.pull.body = "";
     await syncPull(env, { number: 60 });
+    expect(state.enqueue).toHaveBeenCalledWith(env, "pull-unlink", "60:51", {
+      pull: 60,
+      number: 51,
+    });
+    // The status write fails once; the fix is still there to retry.
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "PATCH" && args[1] === "/issues/51" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(unlinkPull(env, { pull: 60, number: 51 })).rejects.toThrow("GitHub unavailable");
+    expect(state.issue.fixes).toHaveLength(1);
+    await unlinkPull(env, { pull: 60, number: 51 });
     expect(status()).toEqual(["status: confirmed"]);
     expect(state.issue.fixes).toEqual([]);
+  });
+
+  it("never unlinks a fix the pull request's reference didn't create, or merged evidence", async () => {
+    // Recorded with Mark as fixed.
+    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "merged", sha }];
+    state.issue.status = "in_nightly";
+    await unlinkPull(env, { pull: 60, number: 51 });
+    // Merged while named, the reference edited out later.
+    state.issue.fixes.push({ kind: "pr", number: 61, url: "", state: "merged", sha, named: true });
+    await unlinkPull(env, { pull: 61, number: 51 });
+    expect(state.issue.fixes).toHaveLength(2);
+    await handleRelease(env, { tag: "v0.1.7", url: "" });
+    expect(state.enqueue).toHaveBeenCalledWith(env, "ship", "51:v0.1.7", expect.anything());
+  });
+
+  it("unlinks many reports one bounded job each", async () => {
+    state.fixedBy = Array.from({ length: 10 }, (_, index) => 100 + index);
+    state.d1 = 0;
+    await syncPull(env, { number: 60 });
+    expect(state.enqueue.mock.calls.filter((call) => call[1] === "pull-unlink")).toHaveLength(10);
+    // One lookup and one batched enqueue, whatever the number of reports.
+    expect(state.d1).toBe(2);
+    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "open", named: true }];
+    state.issue.status = "in_progress";
+    state.d1 = 0;
+    await unlinkPull(env, { pull: 60, number: 100 });
+    expect(state.d1).toBeLessThanOrEqual(4);
   });
 
   it("doesn't add the line again on a retry after a maintainer removed it", async () => {
@@ -513,6 +565,29 @@ describe("status findings", () => {
     // One failed, one posted.
     expect(notes).toHaveLength(2);
     expect(status()).toEqual(["status: in nightly"]);
+  });
+
+  it("finishes the follow-ups when its write landed but wasn't recorded", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    let fail = true;
+    state.failSave = (key, value) => {
+      if (key.startsWith("triage:decision:") && value.includes('"written":true') && fail) {
+        fail = false;
+        throw new Error("Temporary database failure");
+      }
+    };
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes).toEqual([]);
+    await apply();
+    expect(state.issue.fixes[0].sha).toBe(sha);
+    expect(
+      state.request.mock.calls.filter(
+        ([method, path]) => method === "POST" && path === "/issues/51/comments",
+      ),
+    ).toHaveLength(1);
+    expect(state.enqueue).toHaveBeenCalledWith(env, "ship", "51:v0.1.6", expect.anything());
   });
 
   it("records a high fix the way Mark as fixed does", async () => {

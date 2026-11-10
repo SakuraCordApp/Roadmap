@@ -12,6 +12,8 @@ export interface FixRef {
   author?: string;
   state: "open" | "merged" | "closed";
   base?: string;
+  /** Recorded because the pull request names the report as fixed. */
+  named?: true;
 }
 
 export interface TriageResult {
@@ -126,12 +128,13 @@ export async function listIssues(db: D1Database): Promise<IssueRecord[]> {
   return results.map(toIssue);
 }
 
-/** Reports that record a pull request as a fix. */
-export async function issuesFixedByPull(db: D1Database, pull: number): Promise<number[]> {
+/** Reports with an unmerged fix recorded because this pull request named them. */
+export async function issuesReferencedByPull(db: D1Database, pull: number): Promise<number[]> {
   const { results } = await db
     .prepare(
       `SELECT DISTINCT number FROM issues, json_each(issues.fixes_json) AS fix
-       WHERE json_extract(fix.value,'$.kind')='pr' AND json_extract(fix.value,'$.number')=?`,
+       WHERE json_extract(fix.value,'$.kind')='pr' AND json_extract(fix.value,'$.number')=?
+         AND json_extract(fix.value,'$.named')=1 AND json_extract(fix.value,'$.state')!='merged'`,
     )
     .bind(pull)
     .all<{ number: number }>();

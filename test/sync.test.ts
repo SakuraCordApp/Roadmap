@@ -4,6 +4,7 @@ import { ensureSchema } from "../src/db/schema";
 import {
   dropAssessmentNote,
   getState,
+  issuesReferencedByPull,
   setAssessmentNote,
   setState,
   takeAssessmentNote,
@@ -117,5 +118,24 @@ describe("assessment notes", () => {
     // A maintainer restored the status before the sync, so nothing was announced.
     await dropAssessmentNote(db, 52);
     expect(await takeAssessmentNote(db, 52, "in_progress")).toBeNull();
+  });
+});
+
+describe("pull request references", () => {
+  it("find only unmerged fixes a pull request's own reference recorded", async () => {
+    await ensureSchema(db);
+    const report = (number: number, fixes: object[]) =>
+      db
+        .prepare(
+          "INSERT INTO issues(number,title,state,status,fixes_json,created_at,updated_at,synced_at) VALUES(?,?,?,?,?,?,?,?)",
+        )
+        .bind(number, "t", "open", "in_progress", JSON.stringify(fixes), "x", "x", "x")
+        .run();
+    const pr = { kind: "pr", number: 60, url: "" };
+    await report(1, [{ ...pr, state: "open", named: true }]);
+    await report(2, [{ ...pr, state: "merged", sha: "a", named: true }]);
+    await report(3, [{ ...pr, state: "merged", sha: "a" }]);
+    await report(4, [{ ...pr, state: "closed", named: true }]);
+    expect((await issuesReferencedByPull(db, 60)).sort()).toEqual([1, 4]);
   });
 });

@@ -279,11 +279,17 @@ export async function applyTriageResult(
   // between this read and the write below can still be overwritten.
   const current = await github.request<GhIssue>("GET", issuePath);
   const now = deriveStatus(current);
+  // A retry finds this result's write landed, even unrecorded, when the trigger
+  // label is gone and the status is the one it set.
+  const landed =
+    decision !== null &&
+    (decision.written ||
+      (now === decision.to && !labelNames(current).includes(AGENT_LABELS.investigate.name)));
   // The follow-ups belong to the status this result set, while it stands.
-  let standing = now === decision?.to;
-  if (!decision?.written) {
-    // A status set since the result was first read, by a maintainer or by a
-    // write of this result that landed unrecorded, cancels every automatic change.
+  let standing = landed && now === decision!.to;
+  if (!landed) {
+    // A status a maintainer set since the result was first read cancels every
+    // automatic change.
     const proceed = decision ? decision.to !== null && now === decision.from : now === status;
     const duplicate = proceed ? foundDuplicate : null;
     const regression = sure("fix") && resolution?.state === "possible_regression";
