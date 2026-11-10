@@ -237,11 +237,12 @@ export async function recordShipment(
 ): Promise<void> {
   const github = new GitHub(env);
   const version = releaseDisplayName(payload.tag);
+  // Automatic shipping always reads GitHub: the cache can lag behind a
+  // resolution a maintainer already made there.
   const current =
-    !issue.shippedIn || issue.state === "open"
+    !issue.shippedIn || issue.state === "open" || !confirmation
       ? await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`))
       : null;
-  // The cache can lag behind a resolution a maintainer already made on GitHub.
   if (!confirmation && current?.state === "closed" && current.state_reason !== "completed") return;
   if (!issue.shippedIn || current?.state === "open") {
     let milestone: number | undefined;

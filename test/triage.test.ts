@@ -743,6 +743,15 @@ describe("status findings", () => {
     expect(state.notes.get("confirmed")?.text).toContain("aaaaaaa, so this broke again");
   });
 
+  it("keeps a kind a maintainer changed while the agent ran", async () => {
+    result.sourceKind = "bug";
+    result.triage.kind = "bug";
+    rate({ kind: "high" });
+    state.current.type = { name: "Feature" };
+    await apply();
+    expect(state.current.type).toEqual({ name: "Feature" });
+  });
+
   it("changes the kind only when that finding is rated high", async () => {
     result.triage.kind = "feature";
     rate({ kind: "medium" });

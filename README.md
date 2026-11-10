@@ -126,6 +126,8 @@ happen within seconds of each other; each is rare and fixable by hand.
   correction and skip the fix note and release checks. Use Mark as fixed.
 - A maintainer removes the `Fixes #N` line just after the hub added it and
   before it recorded doing so: a retry adds it again. Remove it again.
+- GitHub fails while the hub adds the `Fixes #N` line, and the pull request
+  merges before the retry: the report isn't linked. Use Mark as fixed.
 - Two updates to one report's fixes at the same moment, such as the assessment
   recording a fix while a pull request merges, can drop one. Mark as fixed
   restores it.

@@ -10,6 +10,8 @@ const resultSchema = z.object({
   version: z.literal(1),
   number: z.number().int().positive(),
   sourceTitle: z.string().max(256),
+  // The kind the agent saw; absent in older results.
+  sourceKind: z.enum(["bug", "feature"]).nullable().optional(),
   bodyHash: z.string().regex(/^[a-f0-9]{64}$/),
   candidates: z.array(z.number().int().positive()).max(12),
   model: z.string().min(1).max(100),

@@ -311,11 +311,15 @@ export async function applyTriageResult(
     const duplicate = proceed ? foundDuplicate : null;
     const regression = sure("fix") && resolution?.state === "possible_regression";
     const reportedKind = issueKind(current);
-    // A kind someone changed since is a correction; a duplicate keeps its kind,
-    // so closing it doesn't move its Discord post.
+    // A kind someone changed since the agent read the report is a correction;
+    // a duplicate keeps its kind, so closing it doesn't move its Discord post.
     const kind =
       !reportedKind ||
-      (proceed && reportedKind === startKind && !duplicate && (!findings || sure("kind")))
+      (proceed &&
+        reportedKind === startKind &&
+        (envelope.sourceKind === undefined || reportedKind === envelope.sourceKind) &&
+        !duplicate &&
+        (!findings || sure("kind")))
         ? result.kind
         : reportedKind;
     const labels = new Set(labelNames(current));
