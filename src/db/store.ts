@@ -12,8 +12,6 @@ export interface FixRef {
   author?: string;
   state: "open" | "merged" | "closed";
   base?: string;
-  /** Recorded because the pull request names the report as fixed. */
-  named?: true;
 }
 
 export interface TriageResult {
@@ -128,17 +126,64 @@ export async function listIssues(db: D1Database): Promise<IssueRecord[]> {
   return results.map(toIssue);
 }
 
-/** Reports with an unmerged fix recorded because this pull request named them. */
+/**
+ * Reports with this pull request recorded as an unmerged fix. Only a closing
+ * reference records one: Mark as fixed takes merged pull requests or commits.
+ */
 export async function issuesReferencedByPull(db: D1Database, pull: number): Promise<number[]> {
   const { results } = await db
     .prepare(
       `SELECT DISTINCT number FROM issues, json_each(issues.fixes_json) AS fix
        WHERE json_extract(fix.value,'$.kind')='pr' AND json_extract(fix.value,'$.number')=?
-         AND json_extract(fix.value,'$.named')=1 AND json_extract(fix.value,'$.state')!='merged'`,
+         AND json_extract(fix.value,'$.state')!='merged'`,
     )
     .bind(pull)
     .all<{ number: number }>();
   return results.map((row) => row.number);
+}
+
+type FixFields = Pick<IssueRecord, "fixes" | "shippedIn" | "shippedStableIn">;
+
+/**
+ * Change a report's fixes from their current value, and retry if another
+ * writer changed them first, so concurrent fix updates are never lost.
+ */
+export async function editFixes(
+  db: D1Database,
+  number: number,
+  edit: (current: FixFields) => Partial<FixFields> | null,
+): Promise<FixRef[] | null> {
+  for (;;) {
+    const row = await db
+      .prepare("SELECT fixes_json,shipped_in,shipped_stable_in FROM issues WHERE number=?")
+      .bind(number)
+      .first<{ fixes_json: string; shipped_in: string | null; shipped_stable_in: string | null }>();
+    if (!row) return null;
+    const current: FixFields = {
+      fixes: parse(row.fixes_json, []),
+      shippedIn: row.shipped_in,
+      shippedStableIn: row.shipped_stable_in,
+    };
+    const patch = edit(current);
+    if (!patch) return current.fixes;
+    const next = { ...current, ...patch };
+    const { meta } = await db
+      .prepare(
+        `UPDATE issues SET fixes_json=?,shipped_in=?,shipped_stable_in=? WHERE number=?
+         AND fixes_json=? AND shipped_in IS ? AND shipped_stable_in IS ?`,
+      )
+      .bind(
+        JSON.stringify(next.fixes),
+        next.shippedIn,
+        next.shippedStableIn,
+        number,
+        row.fixes_json,
+        row.shipped_in,
+        row.shipped_stable_in,
+      )
+      .run();
+    if (meta.changes) return next.fixes;
+  }
 }
 
 export async function saveIssue(db: D1Database, issue: IssueRecord): Promise<void> {

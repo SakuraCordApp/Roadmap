@@ -170,9 +170,13 @@ async function linkPull(github: GitHub, number: number, report: number): Promise
  */
 type Decision = {
   hash: string;
+  at: string;
   from: StatusId;
   kind: IssueKind | null;
+  title: string;
   to: StatusId | null;
+  /** The GitHub write it intended: labels it adds and removes, and what else it sets. */
+  write: { add: string[]; remove: string[]; type?: string; title?: string; closed?: true };
   written?: true;
   fixNote?: true;
   pullLinked?: true;
@@ -231,7 +235,8 @@ export async function applyTriageResult(
   // that attempt didn't, and none once a maintainer has corrected the report.
   const decisionKey = `triage:decision:${payload.commentId}`;
   const stored = await getJsonState<Decision | null>(env.DB, decisionKey, null);
-  let decision = stored?.hash === hash ? stored : null;
+  const retry = stored?.hash === hash;
+  let decision = retry ? stored : null;
   const save = async (step: Partial<Decision> = {}) => {
     decision = { ...decision!, ...step };
     await setState(env.DB, decisionKey, JSON.stringify(decision));
@@ -279,18 +284,29 @@ export async function applyTriageResult(
   // between this read and the write below can still be overwritten.
   const current = await github.request<GhIssue>("GET", issuePath);
   const now = deriveStatus(current);
-  // A retry finds this result's write landed, even unrecorded, when the trigger
-  // label is gone and the status is the one it set.
+  // A retry finds this result's write landed, even unrecorded, when the issue
+  // shows everything that write intended. GitHub applies a write whole.
+  const live = labelNames(current);
+  const intended = decision?.write;
   const landed =
     decision !== null &&
     (decision.written ||
-      (now === decision.to && !labelNames(current).includes(AGENT_LABELS.investigate.name)));
+      (intended!.add.every((name) => live.includes(name)) &&
+        intended!.remove.every((name) => !live.includes(name)) &&
+        (!intended!.type || current.type?.name === intended!.type) &&
+        (!intended!.title || current.title === intended!.title) &&
+        (!intended!.closed || current.state === "closed")));
   // The follow-ups belong to the status this result set, while it stands.
   let standing = landed && now === decision!.to;
   if (!landed) {
-    // A status a maintainer set since the result was first read cancels every
-    // automatic change.
-    const proceed = decision ? decision.to !== null && now === decision.from : now === status;
+    // A status, kind or title someone changed since the result was first read
+    // cancels every automatic change.
+    const proceed = decision
+      ? decision.to !== null &&
+        now === decision.from &&
+        issueKind(current) === decision.kind &&
+        current.title === decision.title
+      : now === status;
     const duplicate = proceed ? foundDuplicate : null;
     const regression = sure("fix") && resolution?.state === "possible_regression";
     const reportedKind = issueKind(current);
@@ -341,9 +357,18 @@ export async function applyTriageResult(
     patch.labels = [...labels];
     decision ??= {
       hash,
+      at: nowIso(),
       from: status,
       kind: startKind,
+      title: first.title,
       to: !proceed ? null : duplicate ? "duplicate" : (next ?? now),
+      write: {
+        add: [...labels].filter((name) => !live.includes(name)),
+        remove: live.filter((name) => !labels.has(name)),
+        ...(patch.type ? { type: patch.type as string } : {}),
+        ...(patch.title ? { title: patch.title as string } : {}),
+        ...(duplicate ? { closed: true as const } : {}),
+      },
     };
     await save();
     // Cache before removing the trigger label, so its webhook cannot start a
@@ -378,11 +403,24 @@ export async function applyTriageResult(
   if (standing) {
     // Recorded as Mark as fixed records a fix.
     if (fix && decision!.to === "in_nightly") {
-      await recordNightlyFix(env, issue, fix);
+      await recordNightlyFix(env, issue.number, fix);
       if (!decision!.fixNote) {
-        await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
-          body: `${NO_MIRROR}\nThe assessment verified this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.`,
-        });
+        // The note carries the result's identity, so a retry finds one posted
+        // before it could be recorded.
+        const marker = `<!-- sakuracord:fix-note ${payload.commentId} -->`;
+        const comments = github.repo(`/issues/${issue.number}/comments`);
+        const posted =
+          retry &&
+          (
+            await github.request<GhComment[]>(
+              "GET",
+              `${comments}?since=${encodeURIComponent(decision!.at)}&per_page=100`,
+            )
+          ).some((comment) => comment.body?.includes(marker));
+        if (!posted)
+          await github.request("POST", comments, {
+            body: `${NO_MIRROR}\n${marker}\nThe assessment verified this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.`,
+          });
         await save({ fixNote: true });
       }
       await checkReleases(env, issue.number, releases);

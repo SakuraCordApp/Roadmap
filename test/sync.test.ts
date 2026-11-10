@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { db } from "./d1";
+import { db, sqlite } from "./d1";
 import { ensureSchema } from "../src/db/schema";
 import {
   dropAssessmentNote,
+  editFixes,
   getState,
   issuesReferencedByPull,
   setAssessmentNote,
@@ -137,5 +138,31 @@ describe("pull request references", () => {
     await report(3, [{ ...pr, state: "merged", sha: "a" }]);
     await report(4, [{ ...pr, state: "closed", named: true }]);
     expect((await issuesReferencedByPull(db, 60)).sort()).toEqual([1, 4]);
+  });
+});
+
+describe("fix edits", () => {
+  it("keep a merge recorded while another edit was being made", async () => {
+    await ensureSchema(db);
+    const linked = { kind: "pr", number: 60, url: "", state: "open" };
+    const merged = { kind: "pr", number: 61, url: "", state: "merged", sha: "b" };
+    await db
+      .prepare(
+        "INSERT INTO issues(number,title,state,status,fixes_json,created_at,updated_at,synced_at) VALUES(?,?,?,?,?,?,?,?)",
+      )
+      .bind(9, "t", "open", "in_progress", JSON.stringify([linked]), "x", "x", "x")
+      .run();
+    let merging = true;
+    const fixes = await editFixes(db, 9, (current) => {
+      // Pull request sync records the other pull request's merge meanwhile.
+      if (merging) {
+        merging = false;
+        sqlite
+          .prepare("UPDATE issues SET fixes_json=? WHERE number=9")
+          .run(JSON.stringify([linked, merged]));
+      }
+      return { fixes: current.fixes.filter((fix) => fix.number !== 60) };
+    });
+    expect(fixes).toEqual([merged]);
   });
 });

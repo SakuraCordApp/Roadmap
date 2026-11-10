@@ -13,6 +13,7 @@ const state = vi.hoisted(() => ({
   pull: {} as any,
   compare: "ahead",
   fixedBy: [] as number[],
+  posted: [] as string[],
   d1: 0,
   failSave: undefined as ((key: string, value: string) => void) | undefined,
   duringLookup: undefined as (() => void) | undefined,
@@ -46,6 +47,11 @@ vi.mock("../src/db/store", () => ({
     state.d1++;
     Object.assign(state.issue, patch);
   },
+  editFixes: async (_db: unknown, _number: number, edit: (current: any) => object | null) => {
+    const patch = edit({ shippedIn: null, shippedStableIn: null, ...state.issue });
+    if (patch) Object.assign(state.issue, patch);
+    return state.issue.fixes;
+  },
   setAssessmentNote: async (_db: unknown, _number: number, note: any) => {
     state.notes.clear();
     if (note) state.notes.set(note.status, { text: note.text, author: note.author });
@@ -74,6 +80,7 @@ beforeEach(async () => {
   state.notes.clear();
   state.compare = "ahead";
   state.fixedBy = [];
+  state.posted = [];
   state.failSave = undefined;
   state.target = { number: 52, state: "open", state_reason: null, labels: ["status: confirmed"] };
   state.pull = {
@@ -144,7 +151,9 @@ beforeEach(async () => {
     if (path.startsWith("/pulls/"))
       return method === "PATCH" ? Object.assign(state.pull, body) : state.pull;
     if (path === "/issues/52") return state.target;
+    if (path.startsWith("/issues/51/comments?")) return state.posted.map((body) => ({ body }));
     if (method === "GET") return path.includes("/comments/") ? state.comment : state.current;
+    if (method === "POST" && path === "/issues/51/comments") state.posted.push(body.body);
     if (method === "PATCH") Object.assign(state.current, body);
     if (method === "POST" && body.labels) state.current.labels.push(...body.labels);
     if (method === "DELETE")
@@ -463,7 +472,7 @@ describe("status findings", () => {
     state.pull.body = "Fixes #51";
     await syncPull(env, { number: 60 });
     expect(status()).toEqual(["status: in progress"]);
-    expect(state.issue.fixes[0]).toMatchObject({ number: 60, state: "open", named: true });
+    expect(state.issue.fixes[0]).toMatchObject({ number: 60, state: "open" });
     state.issue.status = "in_progress";
     state.fixedBy = [51];
     state.pull.body = "";
@@ -487,6 +496,30 @@ describe("status findings", () => {
     await unlinkPull(env, { pull: 60, number: 51 });
     expect(status()).toEqual(["status: confirmed"]);
     expect(state.issue.fixes).toEqual([]);
+  });
+
+  it("unlinks an older unmerged reference, also once the pull request merged without naming the report", async () => {
+    // Recorded before this change, and the pull request merged after the
+    // line was removed: the merge never counted for this report.
+    state.issue.fixes = [{ kind: "pr", number: 60, url: "", state: "open" }];
+    state.issue.status = "in_progress";
+    state.current.labels = ["status: in progress"];
+    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+    await unlinkPull(env, { pull: 60, number: 51 });
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+
+    // Merged while it named the report, the line removed later: kept.
+    state.issue.status = "new";
+    state.current.labels = ["status: new"];
+    state.pull.body = "Fixes #51";
+    await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: in nightly"]);
+    state.issue.status = "in_nightly";
+    state.pull.body = "";
+    await unlinkPull(env, { pull: 60, number: 51 });
+    expect(state.issue.fixes).toEqual([expect.objectContaining({ state: "merged", sha })]);
+    expect(status()).toEqual(["status: in nightly"]);
   });
 
   it("never unlinks a fix the pull request's reference didn't create, or merged evidence", async () => {
@@ -588,6 +621,65 @@ describe("status findings", () => {
       ),
     ).toHaveLength(1);
     expect(state.enqueue).toHaveBeenCalledWith(env, "ship", "51:v0.1.6", expect.anything());
+  });
+
+  it("re-applies an unchanged-status write that failed, even without its trigger label", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "high" });
+    result.triage.needsInformation = false;
+    refreshComment();
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "PATCH" && args[1] === "/issues/51" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    // A maintainer removes the trigger label; the status stays New either way.
+    state.current.labels = state.current.labels.filter(
+      (name: string) => name !== "agent: investigate",
+    );
+    await apply();
+    expect(state.current.type).toBe("Feature");
+    expect(status()).toEqual(["status: new"]);
+  });
+
+  it("respects a maintainer's correction after a failed write", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "high" });
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "PATCH" && args[1] === "/issues/51" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    state.current.labels = ["status: confirmed", "agent: investigate"];
+    await apply();
+    expect(state.current.type).toEqual({ name: "Bug" });
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.current.labels).not.toContain("agent: investigate");
+  });
+
+  it("doesn't post the fix note again when recording it failed", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    let fail = true;
+    state.failSave = (key, value) => {
+      if (key.startsWith("triage:decision:") && value.includes('"fixNote":true') && fail) {
+        fail = false;
+        throw new Error("Temporary database failure");
+      }
+    };
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    await apply();
+    expect(state.posted.filter((body) => body.includes("sakuracord:fix-note 10"))).toHaveLength(1);
   });
 
   it("records a high fix the way Mark as fixed does", async () => {

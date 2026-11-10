@@ -9,6 +9,7 @@ import {
 } from "../config";
 import {
   addEvent,
+  editFixes,
   getIssue,
   getState,
   issuesReferencedByPull,
@@ -123,7 +124,7 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
       : pull.state === "open"
         ? "open"
         : "closed";
-    const fixes = upsertFix(issue.fixes, {
+    const ref: FixRef = {
       kind: "pr",
       number: pull.number,
       url: pull.html_url,
@@ -132,9 +133,10 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
       state,
       base: pull.base.ref,
       ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
-      named: true,
-    });
-    await patchIssue(env.DB, number, { fixes });
+    };
+    const fixes = (await editFixes(env.DB, number, (current) => ({
+      fixes: upsertFix(current.fixes, ref),
+    })))!;
     const open = STATUS_BY_ID.get(issue.status)!.open;
     if (!open) continue;
     if (state === "open" && ["new", "needs_info", "confirmed", "planned"].includes(issue.status)) {
@@ -168,27 +170,32 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
 }
 
 /**
- * Drop an unmerged pull request's closing reference that its description no
- * longer contains, and leave In Progress as a pull request closed unmerged
- * would. The status changes first, so a failed write is retried.
+ * Drop a pull request as a report's fix once its description no longer names
+ * the report, unless it was merged while it did. The report leaves In Progress
+ * as it would if the pull request closed unmerged; that write comes first, so
+ * a failed one is retried.
  */
 export async function unlinkPull(
   env: Env,
   payload: { pull: number; number: number },
 ): Promise<void> {
   const issue = await getIssue(env.DB, payload.number);
+  // Pull request sync marks the fix merged only if the pull request named the
+  // report when it merged; any other recorded state means it no longer counts.
   const linked = (fix: FixRef) =>
-    fix.kind === "pr" && fix.number === payload.pull && fix.named && fix.state !== "merged";
+    fix.kind === "pr" && fix.number === payload.pull && fix.state !== "merged";
   if (!issue?.fixes.some(linked)) return;
   const github = new GitHub(env);
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.pull}`));
-  // A merged pull request may still have named the report when it merged.
-  if (pull.merged || referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number))
-    return;
-  const fixes = issue.fixes.filter((fix) => !linked(fix));
-  if (issue.status === "in_progress" && !fixes.some((fix) => fix.state !== "closed"))
+  if (referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number)) return;
+  if (
+    issue.status === "in_progress" &&
+    !issue.fixes.some((fix) => !linked(fix) && fix.state !== "closed")
+  )
     await setStatusLabel(env, issue.number, "confirmed");
-  await patchIssue(env.DB, issue.number, { fixes });
+  await editFixes(env.DB, issue.number, (current) =>
+    current.fixes.some(linked) ? { fixes: current.fixes.filter((fix) => !linked(fix)) } : null,
+  );
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
 }
 
@@ -200,7 +207,7 @@ export async function syncPush(
     for (const number of referencedIssues(commit.message)) {
       const issue = await getIssue(env.DB, number);
       if (!issue?.kind) continue;
-      const fixes = upsertFix(issue.fixes, {
+      const ref: FixRef = {
         kind: "commit",
         sha: commit.id,
         url: commit.url,
@@ -208,8 +215,8 @@ export async function syncPush(
         author: commit.author,
         state: "merged",
         base: NIGHTLY_BRANCH,
-      });
-      await patchIssue(env.DB, number, { fixes });
+      };
+      await editFixes(env.DB, number, (current) => ({ fixes: upsertFix(current.fixes, ref) }));
       if (STATUS_BY_ID.get(issue.status)!.open && issue.status !== "in_nightly") {
         await addEvent(
           env.DB,
