@@ -206,4 +206,15 @@ describe("maintainer fix confirmation", () => {
     await shipIssue(env, { number: 51, tag: nightly.tag, url: nightly.url });
     expect(state.current.state).toBe("closed");
   });
+  it("leaves a report a maintainer declined before its queued release check runs", async () => {
+    await performAction(env, 51, "mark_fixed", "maintainer", {
+      release: "unreleased",
+      reference: sha,
+    });
+    state.issue.status = "declined";
+    state.request.mockClear();
+    await shipIssue(env, { number: 51, tag: nightly.tag, url: nightly.url });
+    expect(state.request).not.toHaveBeenCalled();
+    expect(state.issue.shippedIn).toBeNull();
+  });
 });

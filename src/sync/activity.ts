@@ -198,7 +198,7 @@ export async function handleRelease(
       issue.kind &&
       (issue.fixes.some((fix) => fix.state === "merged" && fix.sha) || issue.shippedIn) &&
       (!issue.shippedIn || (!prerelease && !issue.shippedStableIn)) &&
-      !["duplicate", "declined", "cant_reproduce"].includes(issue.status),
+      !resolvedOtherwise(issue),
   );
   await enqueueMany(
     env,
@@ -211,13 +211,17 @@ export async function handleRelease(
   await setState(env.DB, "github:releases-refreshed", "0");
 }
 
+// A maintainer may resolve a report another way while its queued release check waits.
+const resolvedOtherwise = (issue: IssueRecord) =>
+  ["duplicate", "declined", "cant_reproduce"].includes(issue.status);
+
 /** Ship one issue if the release tag contains any of its merged fixes. */
 export async function shipIssue(
   env: Env,
   payload: { number: number; tag: string; url: string },
 ): Promise<void> {
   const issue = await getIssue(env.DB, payload.number);
-  if (!issue) return;
+  if (!issue || resolvedOtherwise(issue)) return;
   const github = new GitHub(env);
   if (!(await containsAnyFix(env, github, issue, payload.tag))) return;
   await recordShipment(env, issue, payload, isPrereleaseTag(payload.tag));
