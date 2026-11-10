@@ -119,6 +119,12 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     );
   } else if (previous.status !== record.status) {
     await addEvent(env.DB, record.number, "status", { from: previous.status, to: record.status });
+    // The assessment card's outcome follows the synced status, which can land
+    // after the card last refreshed. Queue it before Discord work that may fail.
+    await enqueue(env, "agent-status", `${record.number}:investigate`, {
+      number: record.number,
+      kind: "investigate",
+    });
   }
 
   if (record.status === "duplicate" && record.duplicateOf && previous?.status !== "duplicate") {
@@ -169,14 +175,6 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     (previous.milestoneNumber !== record.milestoneNumber || previous.state !== record.state)
   ) {
     await enqueue(env, "milestones", "all", {}, 5);
-  }
-  // The assessment card's outcome follows the synced status, which can land
-  // after the card last refreshed.
-  if (previous && previous.status !== record.status) {
-    await enqueue(env, "agent-status", `${record.number}:investigate`, {
-      number: record.number,
-      kind: "investigate",
-    });
   }
 }
 
