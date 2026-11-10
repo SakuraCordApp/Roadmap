@@ -118,9 +118,9 @@ export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
     !resolution?.commit ||
     !["fixed_unreleased", "fixed_nightly", "fixed_regular"].includes(resolution.state) ||
     !STATUS_BY_ID.get(issue.status)!.open ||
-    issue.fixes.some((fix) => fix.sha === resolution.commit) ||
-    // A confirmed release records no commit, and the maintainer may have picked
-    // a later release; after any confirmed shipment a reopened report is theirs.
+    // Any recorded fix or shipment, including a maintainer's own correction,
+    // supersedes the assessment's finding.
+    issue.fixes.length > 0 ||
     issue.shippedIn
   )
     return null;
