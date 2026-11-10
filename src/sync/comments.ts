@@ -283,11 +283,26 @@ interface DiscordMessage {
   attachments?: Array<{ id: string; filename: string; content_type?: string; url: string }>;
   mentions?: Array<{ id: string; username: string; global_name?: string | null }>;
   referenced_message?: DiscordMessage | null;
+  /** Components V2 messages carry their text here instead of in content. */
+  components?: unknown[];
   timestamp: string;
   edited_timestamp?: string | null;
 }
 
 const snowflake = (value: string | null | undefined) => BigInt(value || "0");
+
+/** The readable text of a message, including Components V2 Text Displays. */
+function messageText(message: DiscordMessage): string {
+  if (message.content) return message.content;
+  const texts: string[] = [];
+  const visit = (node: any) => {
+    if (Array.isArray(node)) return node.forEach(visit);
+    if (node?.type === 10 && typeof node.content === "string") texts.push(node.content);
+    visit(node?.components ?? []);
+  };
+  visit(message.components ?? []);
+  return texts.join("\n");
+}
 
 function displayName(message: DiscordMessage): string {
   return message.member?.nick || message.author.global_name || message.author.username;
@@ -330,7 +345,7 @@ function githubCommentBody(env: Env, threadId: string, message: DiscordMessage):
     contentType: attachment.content_type ?? null,
   }));
   const reply = message.referenced_message
-    ? `> ↩︎ **${neutralizeUserText(displayName(message.referenced_message))}**: ${neutralizeUserText(truncate(message.referenced_message.content || "(attachment)", 160)).replace(/\n/g, " ")}\n\n`
+    ? `> ↩︎ **${neutralizeUserText(displayName(message.referenced_message))}**: ${neutralizeUserText(truncate(messageText(message.referenced_message) || "(attachment)", 160)).replace(/\n/g, " ")}\n\n`
     : "";
   const text = discordToGithub(message);
   return `<!-- sakuracord:origin=discord message=${message.id} -->\n**${neutralizeUserText(displayName(message))}** on [Discord](${link}):\n\n${reply}${text}${attachments.length ? `\n\n${attachmentMarkdown(attachments)}` : ""}`.slice(

@@ -182,7 +182,9 @@ export async function projectIssue(
       env,
       primary.threadId,
       {
-        content: `Reclassified as a ${issue.kind === "bug" ? "bug" : "feature suggestion"}. [Previous discussion](${threadUrl(DISCORD.guildId, old.threadId)}) remains available; continue here.`,
+        ...threadNotice(
+          `Reclassified as a ${issue.kind === "bug" ? "bug" : "feature suggestion"}. [Previous discussion](${threadUrl(DISCORD.guildId, old.threadId)}) remains available; continue here.`,
+        ),
         allowed_mentions: noMentions,
       },
       { nonceKey: `reclassified:${old.threadId}:${primary.threadId}` },
