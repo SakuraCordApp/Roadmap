@@ -24,7 +24,7 @@ import {
   type DraftUser,
   type IssueRecord,
 } from "./db/store";
-import { issueUrl, threadUrl, trackerUrl } from "./discord/cards";
+import { issueUrl, threadNotice, threadUrl, trackerUrl } from "./discord/cards";
 import { noMentions, type UploadFile } from "./discord/rest";
 import {
   attachmentProxyUrl,
@@ -184,7 +184,9 @@ export async function fileReport(
     ).catch(async (error) => {
       console.error("Report attachment upload failed", error);
       await postInThread(env, thread.threadId, {
-        content: `⚠️ <@${draft.user.id}>, your attachments couldn't be uploaded. Please add them to this post.`,
+        ...threadNotice(
+          `⚠️ <@${draft.user.id}>, your attachments couldn't be uploaded. Please add them to this post.`,
+        ),
         allowed_mentions: noMentions,
       }).catch(() => undefined);
       return [];
