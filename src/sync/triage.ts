@@ -40,7 +40,7 @@ import { deriveStatus, issueKind, statusGithubLabel } from "../lifecycle";
 import { valuesFromBody } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { nowIso } from "../util/text";
-import { pullFixRef, upsertFix } from "./activity";
+import { pullFixRef, questionsAllowed, upsertFix } from "./activity";
 
 /** Public report context for the read-only Actions agent, bounded to twelve candidates. */
 export async function assessmentContext(env: Env, number: number) {
@@ -77,6 +77,8 @@ export async function assessmentContext(env: Env, number: number) {
   return {
     areas: AREAS,
     priorities: PRIORITIES,
+    questionsAllowed: await questionsAllowed(env, number),
+    previousQuestions: issue.triage?.needsInformation ? issue.triage.questions : [],
     candidates,
     reportedVersion,
     reportedRelease,
@@ -262,7 +264,8 @@ export async function applyTriageResult(
       const ask =
         (kind === "bug" || sure("existingFeature")) &&
         result.needsInformation &&
-        !(result.duplicateOf && result.duplicateConfidence >= 0.75);
+        !(result.duplicateOf && result.duplicateConfidence >= 0.75) &&
+        (await questionsAllowed(env, issue.number));
       next = duplicate ? null : ask ? "needs_info" : (next ?? (regression ? "confirmed" : "new"));
     }
     if (next) {

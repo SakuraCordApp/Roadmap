@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTriageResult, TRIAGE_MARKER } from "../src/ai/triage";
-import { syncPull } from "../src/sync/activity";
+import { returnToTriage, syncPull } from "../src/sync/activity";
 import { applyTriageResult, runTriage } from "../src/sync/triage";
 import { sha256 } from "../src/util/crypto";
 import type { Env } from "../src/env";
@@ -220,6 +220,28 @@ describe("combined assessment", () => {
     await runTriage(env, { number: 51 });
     expect(state.current.labels).toContain("agent: investigate");
     expect(state.current.labels).not.toContain("status: needs info");
+  });
+
+  it("bounds automated follow-up questions and then hands answers to a maintainer", async () => {
+    state.issue.triagedAt = "2026-11-09T16:22:00Z";
+    for (const round of [1, 2]) {
+      state.current.labels = ["status: needs info"];
+      await returnToTriage(env, 51);
+      expect(state.issue.triagedAt).toBeNull();
+      expect(state.values.get("triage:answer-runs:51")).toBe(String(round));
+      state.issue.triagedAt = "2026-11-09T16:40:00Z";
+    }
+    // The last automated run may not ask again, even if the agent wants to.
+    state.current.labels = ["status: new", "agent: investigate"];
+    await applyTriageResult(env, { number: 51, commentId: 10 });
+    expect(state.current.labels).toContain("status: new");
+    expect(state.current.labels).not.toContain("status: needs info");
+    // A maintainer's own question still reaches them, without another run.
+    state.current.labels = ["status: needs info"];
+    await returnToTriage(env, 51);
+    expect(state.issue.triagedAt).not.toBeNull();
+    expect(state.current.labels).toContain("status: new");
+    expect(state.values.get("triage:answer-runs:51")).toBe("2");
   });
 
   it("tracks a verified unreleased fix without marking it shipped", async () => {

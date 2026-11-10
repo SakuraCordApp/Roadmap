@@ -1,6 +1,7 @@
 import { markFixed } from "./fixes";
 import { AGENT_LABELS, STATUS_BY_ID, type StatusId } from "./config";
 import { getIssue, patchIssue, setPendingNote } from "./db/store";
+import { resetAnswerReassessments } from "./sync/activity";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
 import { labelNames, type GhIssue, type GhMilestone } from "./github/types";
@@ -265,6 +266,7 @@ export async function performAction(
       message = "Reopened.";
       break;
     case "investigate":
+      await resetAnswerReassessments(env, number);
       if (labels.includes(AGENT_LABELS.investigate.name)) {
         await github.request(
           "DELETE",
