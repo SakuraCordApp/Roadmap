@@ -26,6 +26,7 @@ import { statusGithubLabel } from "../lifecycle";
 import { valuesFromBody } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { nowIso } from "../util/text";
+import { enqueueAgentStatus } from "./agents";
 
 /** Public report context for the read-only Actions agent, bounded to twelve candidates. */
 export async function assessmentContext(env: Env, number: number) {
@@ -205,10 +206,7 @@ export async function applyTriageResult(
   // triagedAt is cached before the GitHub write; this marks the result applied.
   await setState(env.DB, `triage:applied:${issue.number}`, nowIso());
   // The assessment card shows what this result changed.
-  await enqueue(env, "agent-status", `${issue.number}:investigate`, {
-    number: issue.number,
-    kind: "investigate",
-  });
+  await enqueueAgentStatus(env, issue.number, "investigate");
   if (confirmedFix && resolution?.releaseTag)
     await enqueue(env, "ship", `${issue.number}:${resolution.releaseTag}`, {
       number: issue.number,

@@ -18,6 +18,7 @@ import { labelNames, type GhIssue } from "../github/types";
 import { enqueue, enqueueMany } from "../jobs/queue";
 import { deriveStatus, issueArea, issueKind, issuePriority, planLabels } from "../lifecycle";
 import { parseMeta } from "../report/body";
+import { enqueueAgentStatus } from "./agents";
 import { nowIso } from "../util/text";
 
 export interface SyncIssuePayload {
@@ -121,10 +122,7 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     await addEvent(env.DB, record.number, "status", { from: previous.status, to: record.status });
     // The assessment card's outcome follows the synced status, which can land
     // after the card last refreshed. Queue it before Discord work that may fail.
-    await enqueue(env, "agent-status", `${record.number}:investigate`, {
-      number: record.number,
-      kind: "investigate",
-    });
+    await enqueueAgentStatus(env, record.number, "investigate");
   }
 
   if (record.status === "duplicate" && record.duplicateOf && previous?.status !== "duplicate") {

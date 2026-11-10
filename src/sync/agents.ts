@@ -46,10 +46,11 @@ export async function trackAgentRun(env: Env, run: AgentRun, result?: string): P
       .bind(result, run.number, run.kind, run.runId, run.attempt)
       .run();
   }
-  await enqueue(env, "agent-status", `${run.number}:${run.kind}`, {
-    number: run.number,
-    kind: run.kind,
-  });
+  await enqueueAgentStatus(env, run.number, run.kind);
+}
+
+export async function enqueueAgentStatus(env: Env, number: number, kind: AgentKind) {
+  await enqueue(env, "agent-status", `${number}:${kind}`, { number, kind });
 }
 
 /** One bounded batch per cron tick; completed runs stop polling. */
