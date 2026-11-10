@@ -59,6 +59,14 @@ async function resolveFix(github: GitHub, value: string): Promise<FixRef> {
   };
 }
 
+export async function onNightly(github: GitHub, sha: string): Promise<boolean> {
+  const comparison = await github.request<{ status: string }>(
+    "GET",
+    github.repo(`/compare/${sha}...${NIGHTLY_BRANCH}`),
+  );
+  return ["ahead", "identical"].includes(comparison.status);
+}
+
 function releaseTag(value: string): string {
   const reference = value.trim();
   const path = repositoryPath(reference);
@@ -88,11 +96,7 @@ export async function markFixed(
   let message: string;
   if (input.release === "unreleased") {
     const fix = await resolveFix(github, input.reference ?? "");
-    const comparison = await github.request<{ status: string }>(
-      "GET",
-      github.repo(`/compare/${fix.sha}...${NIGHTLY_BRANCH}`),
-    );
-    if (!["ahead", "identical"].includes(comparison.status))
+    if (!(await onNightly(github, fix.sha!)))
       throw new Error("That fix has not landed on nightly yet. Use Mark in progress instead.");
     await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
       body: `${NO_MIRROR}\nA maintainer confirmed this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.${attribution}`,

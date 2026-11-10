@@ -11,6 +11,7 @@ import {
   addEvent,
   getIssue,
   getState,
+  issuesFixedByPull,
   listIssues,
   patchIssue,
   primaryThread,
@@ -61,7 +62,7 @@ async function setStatusLabel(
   });
 }
 
-function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
+export function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
   const key = (value: FixRef) => (value.kind === "pr" ? `pr:${value.number}` : `sha:${value.sha}`);
   const others = fixes.filter((value) => key(value) !== key(fix));
   // A PR's merge commit may also arrive as a pushed commit; keep the PR entry.
@@ -74,29 +75,34 @@ function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
   return [...others, fix];
 }
 
+export function pullFixRef(pull: GhPull): FixRef {
+  return {
+    kind: "pr",
+    number: pull.number,
+    url: pull.html_url,
+    title: truncate(pull.title, 200),
+    author: pull.user?.login,
+    state: pull.merged ? "merged" : pull.state === "open" ? "open" : "closed",
+    base: pull.base.ref,
+    ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
+  };
+}
+
 export async function syncPull(env: Env, payload: { number: number }): Promise<void> {
   const github = new GitHub(env);
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.number}`));
   if (pull.base.ref === DEFAULT_BRANCH && pull.head.ref === NIGHTLY_BRANCH) return;
-  const numbers = referencedIssues(`${pull.title}\n${pull.body ?? ""}`);
+  // The assessment can record a pull request that doesn't name the report.
+  const numbers = new Set([
+    ...referencedIssues(`${pull.title}\n${pull.body ?? ""}`),
+    ...(await issuesFixedByPull(env.DB, pull.number)),
+  ]);
+  const ref = pullFixRef(pull);
+  const state = ref.state;
   for (const number of numbers) {
     const issue = (await getIssue(env.DB, number)) ?? null;
     if (!issue?.kind) continue;
-    const state: FixRef["state"] = pull.merged
-      ? "merged"
-      : pull.state === "open"
-        ? "open"
-        : "closed";
-    const fixes = upsertFix(issue.fixes, {
-      kind: "pr",
-      number: pull.number,
-      url: pull.html_url,
-      title: truncate(pull.title, 200),
-      author: pull.user?.login,
-      state,
-      base: pull.base.ref,
-      ...(pull.merge_commit_sha && pull.merged ? { sha: pull.merge_commit_sha } : {}),
-    });
+    const fixes = upsertFix(issue.fixes, ref);
     await patchIssue(env.DB, number, { fixes });
     const open = STATUS_BY_ID.get(issue.status)!.open;
     if (!open) continue;

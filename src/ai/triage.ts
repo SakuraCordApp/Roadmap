@@ -5,6 +5,7 @@ import type { GhComment } from "../github/types";
 // The Actions agent publishes a validated result in its own GitHub comment.
 // User-authored markers must never be allowed to change report metadata.
 export const TRIAGE_MARKER = "<!-- sakuracord:triage-result ";
+const rating = z.enum(["low", "medium", "high"]);
 const resultSchema = z.object({
   version: z.literal(1),
   number: z.number().int().positive(),
@@ -12,7 +13,17 @@ const resultSchema = z.object({
   bodyHash: z.string().regex(/^[a-f0-9]{64}$/),
   candidates: z.array(z.number().int().positive()).max(12),
   model: z.string().min(1).max(100),
-  confidence: z.enum(["low", "medium", "high"]).optional(),
+  confidence: rating.optional(),
+  // Each status-changing finding rated on its own; absent in older results.
+  findings: z
+    .object({
+      fix: rating,
+      pullRequest: rating,
+      duplicate: rating,
+      kind: rating,
+      existingFeature: rating,
+    })
+    .optional(),
   triage: z.object({
     kind: z.enum(["bug", "feature"]),
     area: z.string().refine((id) => AREAS.some((area) => area.id === id)),
@@ -38,6 +49,7 @@ const resultSchema = z.object({
           .regex(/^[a-f0-9]{40}$/)
           .nullable(),
         releaseTag: z.string().max(100).nullable(),
+        pullRequest: z.number().int().positive().nullable().optional(),
         explanation: z.string().max(1000),
       })
       .optional(),

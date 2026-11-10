@@ -1,3 +1,4 @@
+import { performAction } from "../actions";
 import { searchReports } from "../ai/search";
 import {
   checkReportVersion,
@@ -12,28 +13,34 @@ import {
   AREAS,
   PRIORITIES,
   ISSUE_TYPES,
+  REPOSITORY_SLUG,
   REPOSITORY_URL,
   STATUS_BY_ID,
   areaLabel,
   priorityLabel,
+  type StatusId,
 } from "../config";
 import {
   getIssue,
   getJsonState,
   getState,
   patchIssue,
+  setPendingNote,
   setState,
   type IssueRecord,
 } from "../db/store";
+import { reclassifiedKey } from "../discord/threads";
+import { onNightly } from "../fixes";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
 import { appBotLogin } from "../github/identity";
-import { labelNames, type GhIssue, type GhComment } from "../github/types";
+import { labelNames, type GhIssue, type GhComment, type GhPull } from "../github/types";
 import { enqueue } from "../jobs/queue";
-import { statusGithubLabel } from "../lifecycle";
+import { deriveStatus, issueKind, statusGithubLabel } from "../lifecycle";
 import { valuesFromBody } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { nowIso } from "../util/text";
+import { pullFixRef, upsertFix } from "./activity";
 
 /** Public report context for the read-only Actions agent, bounded to twelve candidates. */
 export async function assessmentContext(env: Env, number: number) {
@@ -129,6 +136,24 @@ export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
   return { commit: resolution.commit, releaseTag: resolution.releaseTag };
 }
 
+/** Signs the Discord notices for status changes the assessment makes. */
+const ASSESSMENT = "Triage & investigation";
+
+/** A fix in progress: an open pull request from this repository, not a fork. */
+async function openPull(github: GitHub, number: number): Promise<GhPull | null> {
+  const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${number}`));
+  return pull.state === "open" && pull.head.repo?.full_name === REPOSITORY_SLUG ? pull : null;
+}
+
+/** A report can absorb a duplicate unless it was itself closed as one, or declined. */
+async function acceptsDuplicates(github: GitHub, number: number): Promise<boolean> {
+  const target = await github.request<GhIssue>("GET", github.repo(`/issues/${number}`));
+  return (
+    !target.pull_request &&
+    !["duplicate", "declined", "cant_reproduce"].includes(deriveStatus(target))
+  );
+}
+
 /** Apply only the trusted Actions comment, independently of its Discord mirror. */
 export async function applyTriageResult(
   env: Env,
@@ -163,23 +188,43 @@ export async function applyTriageResult(
     await setState(env.DB, key, hash);
     return;
   }
-  const inTriage = ![...labels].some(
-    (name) =>
-      name.startsWith("status: ") &&
-      ![statusGithubLabel("new"), statusGithubLabel("needs_info")].includes(name),
-  );
+  // A status change needs its own finding rated high. Results from before
+  // these ratings applied a fix at high overall confidence, and always their kind.
+  const findings = envelope.findings;
+  const sure = (finding: keyof NonNullable<typeof findings>) => findings?.[finding] === "high";
+  const status = deriveStatus(current);
+  const inTriage = status === "new" || status === "needs_info";
+  // Confirmed and planned reports may still move forward on verified progress.
+  const advancing =
+    inTriage || (Boolean(findings) && (status === "confirmed" || status === "planned"));
   const resolution = result.resolution;
+  const progress = current.state === "open" && !result.needsInformation && !result.duplicateOf;
   const confirmedFix =
-    current.state === "open" &&
-    (inTriage ||
-      (labels.has(statusGithubLabel("in_nightly")!) &&
-        issue.triage?.resolution?.commit === resolution?.commit &&
-        issue.fixes.some((fix) => fix.sha === resolution?.commit))) &&
-    envelope.confidence === "high" &&
-    !result.needsInformation &&
-    !result.duplicateOf &&
+    progress &&
+    (findings ? sure("fix") : envelope.confidence === "high") &&
     resolution?.commit &&
-    FIXED_STATES.includes(resolution.state);
+    FIXED_STATES.includes(resolution.state) &&
+    ((labels.has(statusGithubLabel("in_nightly")!) &&
+      issue.triage?.resolution?.commit === resolution.commit &&
+      issue.fixes.some((fix) => fix.sha === resolution.commit)) ||
+      (advancing && (await onNightly(github, resolution.commit))));
+  const pull =
+    progress && advancing && !confirmedFix && sure("pullRequest") && resolution?.pullRequest
+      ? await openPull(github, resolution.pullRequest)
+      : null;
+  const duplicate =
+    current.state === "open" &&
+    inTriage &&
+    sure("duplicate") &&
+    result.duplicateOf &&
+    (await acceptsDuplicates(github, result.duplicateOf))
+      ? result.duplicateOf
+      : null;
+  const regression = sure("fix") && resolution?.state === "possible_regression";
+  const reportedKind = issueKind(current);
+  // A duplicate keeps its kind, so closing it doesn't move its Discord post.
+  const kind =
+    !reportedKind || (!duplicate && (!findings || sure("kind"))) ? result.kind : reportedKind;
   // Cache before removing the trigger label, so its webhook cannot start a
   // second run. Result retries still apply GitHub changes if that write failed.
   await patchIssue(env.DB, issue.number, {
@@ -198,29 +243,48 @@ export async function applyTriageResult(
             },
           ],
         }
-      : {}),
+      : pull
+        ? { fixes: upsertFix(issue.fixes, pullFixRef(pull)) }
+        : {}),
   });
   labels.delete(AGENT_LABELS.investigate.name);
   const patch: Record<string, unknown> = {};
   if (current.state === "open") {
     if (![...labels].some((name) => name.startsWith("area: "))) {
-      const chosen = valuesFromBody(result.kind, issue.body).area;
+      const chosen = valuesFromBody(kind, issue.body).area;
       labels.add(areaLabel(chosen ?? result.area));
     }
+    let next: StatusId | null = confirmedFix ? "in_nightly" : pull ? "in_progress" : null;
     // Maintainer decisions made after intake take precedence over automated triage.
     if (inTriage) {
       for (const name of [...labels]) if (name.startsWith("priority: ")) labels.delete(name);
       labels.add(priorityLabel(result.priority));
       const ask =
-        result.kind === "bug" &&
+        (kind === "bug" || sure("existingFeature")) &&
         result.needsInformation &&
         !(result.duplicateOf && result.duplicateConfidence >= 0.75);
-      labels.delete(statusGithubLabel("new")!);
-      labels.delete(statusGithubLabel("needs_info")!);
-      labels.add(statusGithubLabel(ask ? "needs_info" : confirmedFix ? "in_nightly" : "new")!);
+      next = duplicate ? null : ask ? "needs_info" : (next ?? (regression ? "confirmed" : "new"));
     }
-    if (current.type?.name !== ISSUE_TYPES[result.kind].githubType)
-      patch.type = ISSUE_TYPES[result.kind].githubType;
+    if (next) {
+      for (const name of [...labels]) if (name.startsWith("status: ")) labels.delete(name);
+      labels.add(statusGithubLabel(next)!);
+    }
+    const changed = duplicate ? "duplicate" : next !== status && next !== "new" ? next : null;
+    if (changed)
+      await setPendingNote(
+        env.DB,
+        issue.number,
+        changed,
+        changed === "confirmed"
+          ? `Set by the assessment: the reported release already has the fix from ${resolution!.commit!.slice(0, 7)}, so this broke again.`
+          : "Set by the assessment.",
+        ASSESSMENT,
+      );
+    if (current.type?.name !== ISSUE_TYPES[kind].githubType) {
+      patch.type = ISSUE_TYPES[kind].githubType;
+      // The moved Discord post says who moved it.
+      if (current.type) await setState(env.DB, reclassifiedKey(issue.number), kind);
+    }
     const bot = await appBotLogin(env);
     if (
       bot &&
@@ -232,6 +296,8 @@ export async function applyTriageResult(
   }
   patch.labels = [...labels];
   await github.request("PATCH", github.repo(`/issues/${issue.number}`), patch);
+  if (duplicate)
+    await performAction(env, issue.number, "duplicate", ASSESSMENT, { note: String(duplicate) });
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
   if (confirmedFix && resolution?.releaseTag)
     await enqueue(env, "ship", `${issue.number}:${resolution.releaseTag}`, {

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTriageResult, TRIAGE_MARKER } from "../src/ai/triage";
+import { syncPull } from "../src/sync/activity";
 import { applyTriageResult, runTriage } from "../src/sync/triage";
 import { sha256 } from "../src/util/crypto";
 import type { Env } from "../src/env";
@@ -8,7 +9,12 @@ const state = vi.hoisted(() => ({
   issue: {} as any,
   current: {} as any,
   comment: {} as any,
+  target: {} as any,
+  pull: {} as any,
+  compare: "ahead",
+  linked: [] as number[],
   values: new Map<string, string>(),
+  notes: new Map<string, { text: string; author: string }>(),
   request: vi.fn(),
   enqueue: vi.fn(),
 }));
@@ -34,6 +40,17 @@ vi.mock("../src/db/store", () => ({
   patchIssue: async (_db: unknown, _number: number, patch: object) => {
     Object.assign(state.issue, patch);
   },
+  setPendingNote: async (
+    _db: unknown,
+    _number: number,
+    status: string,
+    text: string,
+    author: string,
+  ) => {
+    state.notes.set(status, { text, author });
+  },
+  issuesFixedByPull: async () => state.linked,
+  addEvent: async () => undefined,
 }));
 vi.mock("../src/jobs/queue", () => ({ enqueue: (...args: unknown[]) => state.enqueue(...args) }));
 const env = { DB: {} } as Env;
@@ -45,6 +62,22 @@ const refreshComment = () => {
 beforeEach(async () => {
   vi.clearAllMocks();
   state.values.clear();
+  state.notes.clear();
+  state.compare = "ahead";
+  state.linked = [];
+  state.target = { number: 52, state: "open", state_reason: null, labels: ["status: confirmed"] };
+  state.pull = {
+    number: 60,
+    title: "Keep the composer focused",
+    body: "",
+    state: "open",
+    merged: false,
+    merge_commit_sha: null,
+    html_url: "https://github.com/SakuraCordApp/SakuraCord/pull/60",
+    user: { login: "maintainer" },
+    base: { ref: "nightly" },
+    head: { ref: "fix/composer", repo: { full_name: "SakuraCordApp/SakuraCord" } },
+  };
   state.issue = {
     number: 51,
     title: "Original report",
@@ -93,6 +126,9 @@ beforeEach(async () => {
         html_url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v0.1.6",
       };
     if (path.includes("/releases?")) return [];
+    if (path.startsWith("/compare/")) return { status: state.compare };
+    if (path.startsWith("/pulls/")) return state.pull;
+    if (path === "/issues/52") return state.target;
     if (method === "GET") return path.includes("/comments/") ? state.comment : state.current;
     if (method === "PATCH") Object.assign(state.current, body);
     if (method === "POST" && body.labels) state.current.labels.push(...body.labels);
@@ -241,5 +277,200 @@ describe("combined assessment", () => {
     expect(state.current.labels).toContain("status: needs info");
     expect(state.issue.fixes).toEqual([]);
     expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
+  });
+});
+
+describe("status findings", () => {
+  const sha = "a".repeat(40);
+  const rate = (ratings: Record<string, string>) => {
+    result.findings = {
+      fix: "low",
+      pullRequest: "low",
+      duplicate: "low",
+      kind: "low",
+      existingFeature: "low",
+      ...ratings,
+    };
+    result.triage.needsInformation = false;
+    result.triage.questions = [];
+    refreshComment();
+  };
+  const fixedOnNightly = () => {
+    result.triage.resolution = {
+      state: "fixed_nightly",
+      commit: sha,
+      releaseTag: "v0.1.7-Beta-7",
+      pullRequest: null,
+      explanation: "Published in nightly.",
+    };
+  };
+  const apply = () => applyTriageResult(env, { number: 51, commentId: 10 });
+  const status = () => state.current.labels.filter((name: string) => name.startsWith("status: "));
+  const shipped = () => state.enqueue.mock.calls.some((call) => call[1] === "ship");
+
+  it("applies a fix rated high on its own when the overall confidence is lower", async () => {
+    result.confidence = "medium";
+    fixedOnNightly();
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes[0].sha).toBe(sha);
+    expect(shipped()).toBe(true);
+    expect(state.notes.get("in_nightly")).toEqual({
+      text: "Set by the assessment.",
+      author: "Triage & investigation",
+    });
+  });
+
+  it("leaves a fix below high, or not on nightly, for a maintainer to confirm", async () => {
+    result.confidence = "high";
+    fixedOnNightly();
+    rate({ fix: "medium" });
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+    expect(state.issue.fixes).toEqual([]);
+    expect(state.notes.size).toBe(0);
+
+    state.compare = "diverged";
+    state.current.labels.push("agent: investigate");
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+    expect(state.issue.fixes).toEqual([]);
+    expect(shipped()).toBe(false);
+  });
+
+  it("moves Confirmed and Planned forward but never a status a maintainer set otherwise", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    state.current.labels = ["status: confirmed", "agent: investigate"];
+    await apply();
+    expect(status()).toEqual(["status: in nightly"]);
+
+    state.values.clear();
+    state.issue.fixes = [];
+    state.issue.triage = null;
+    state.current.labels = ["status: in progress", "agent: investigate"];
+    await apply();
+    expect(status()).toEqual(["status: in progress"]);
+    expect(state.issue.fixes).toEqual([]);
+  });
+
+  it("keeps results without ratings to their earlier rules", async () => {
+    result.confidence = "high";
+    result.triage.needsInformation = false;
+    result.triage.questions = [];
+    result.triage.kind = "feature";
+    fixedOnNightly();
+    refreshComment();
+    state.current.labels = ["status: confirmed", "agent: investigate"];
+    await apply();
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+    // Their kind still applies regardless of confidence.
+    expect(state.current.type).toBe("Feature");
+  });
+
+  it("marks an open pull request that fixes the report as in progress", async () => {
+    result.triage.resolution = {
+      state: "unresolved",
+      commit: null,
+      releaseTag: null,
+      pullRequest: 60,
+      explanation: "",
+    };
+    rate({ pullRequest: "high" });
+    state.pull.head.repo.full_name = "someone/SakuraCord";
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+
+    state.values.clear();
+    state.pull.head.repo.full_name = "SakuraCordApp/SakuraCord";
+    state.current.labels.push("agent: investigate");
+    await apply();
+    expect(status()).toEqual(["status: in progress"]);
+    expect(state.issue.fixes).toEqual([
+      expect.objectContaining({ kind: "pr", number: 60, state: "open" }),
+    ]);
+    expect(state.notes.get("in_progress")?.text).toBe("Set by the assessment.");
+
+    // Its merge moves the report on, although the pull request never names it.
+    state.issue.status = "in_progress";
+    state.linked = [51];
+    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+    await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: in nightly"]);
+  });
+
+  it("closes a duplicate rated high through the maintainer path, unless its original is closed as one", async () => {
+    result.triage.duplicateOf = 52;
+    result.triage.duplicateConfidence = 0.95;
+    rate({ duplicate: "high", kind: "high" });
+    result.triage.kind = "feature";
+    refreshComment();
+    state.target.state = "closed";
+    state.target.state_reason = "duplicate";
+    await apply();
+    expect(state.current.state).toBe("open");
+    expect(status()).toEqual(["status: new"]);
+
+    state.values.clear();
+    state.target.state = "open";
+    state.target.state_reason = null;
+    state.current.type = { name: "Bug" };
+    state.current.labels.push("agent: investigate");
+    await apply();
+    expect(state.current).toMatchObject({ state: "closed", state_reason: "duplicate" });
+    expect(state.issue.duplicateOf).toBe(52);
+    expect(state.notes.get("duplicate")?.text).toBe("Set by the assessment.");
+    // A duplicate keeps its kind so its Discord post stays put.
+    expect(state.current.type).toEqual({ name: "Bug" });
+  });
+
+  it("confirms a regression of a fix rated high, with a note", async () => {
+    result.triage.resolution = {
+      state: "possible_regression",
+      commit: sha,
+      releaseTag: "v0.1.6",
+      explanation: "Already in the reported release.",
+    };
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+    expect(state.notes.get("confirmed")?.text).toContain("aaaaaaa, so this broke again");
+  });
+
+  it("changes the kind only when that finding is rated high", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "medium" });
+    await apply();
+    expect(state.current.type).toEqual({ name: "Bug" });
+
+    state.values.clear();
+    state.current.labels.push("agent: investigate");
+    rate({ kind: "high" });
+    await apply();
+    expect(state.current.type).toBe("Feature");
+    expect(state.values.get("assessment:reclassified:51")).toBe("feature");
+  });
+
+  it("asks whether an existing feature covers a suggestion", async () => {
+    state.current.type = { name: "Feature" };
+    result.triage.kind = "feature";
+    rate({});
+    result.triage.needsInformation = true;
+    result.triage.questions = ["This already exists under Settings → Chat. Does it cover it?"];
+    refreshComment();
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+
+    state.values.clear();
+    state.current.labels.push("agent: investigate");
+    result.findings.existingFeature = "high";
+    refreshComment();
+    await apply();
+    expect(status()).toEqual(["status: needs info"]);
+    expect(state.notes.get("needs_info")?.text).toBe("Set by the assessment.");
   });
 });
