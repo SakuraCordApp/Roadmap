@@ -7,6 +7,7 @@ import { publicMeta } from "./api/public";
 import {
   MAX_FILE_BYTES,
   MAX_FILES,
+  MAX_TOTAL_FILE_BYTES,
   addDetails,
   addMeToo,
   createDraft,
@@ -61,6 +62,8 @@ function validateValues(kind: IssueKind, values: Record<string, string>): Record
 
 function toUploads(files: Array<z.infer<typeof File>>): UploadFile[] {
   if (files.length > MAX_FILES) throw new Error(`Attach at most ${MAX_FILES} files.`);
+  if (files.reduce((total, file) => total + file.data.byteLength, 0) > MAX_TOTAL_FILE_BYTES)
+    throw new Error("Attachments can add up to 25 MB. Remove or shrink some and try again.");
   return files.map((file) => {
     if (file.data.byteLength > MAX_FILE_BYTES)
       throw new Error(`${file.name} is larger than 10 MB.`);

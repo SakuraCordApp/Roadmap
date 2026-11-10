@@ -53,6 +53,8 @@ import { escapeDiscord, truncate } from "./util/text";
 
 export const MAX_FILES = 5;
 export const MAX_FILE_BYTES = 10 * 1024 * 1024;
+/** Keeps one website or app report within the service binding's RPC message size. */
+export const MAX_TOTAL_FILE_BYTES = 25 * 1024 * 1024;
 const ORIGIN_DISCORD = "<!-- sakuracord:origin=discord -->";
 
 export interface SimilarReport {
@@ -172,12 +174,21 @@ export async function fileReport(
       .bind(thread.threadId, draft.id)
       .run();
 
+    // The issue and its post already exist; failing here would make the
+    // reporter retry and file a duplicate.
     const attachments = await uploadFiles(
       env,
       thread.threadId,
       files,
       `📎 Attachments from <@${draft.user.id}>`,
-    );
+    ).catch(async (error) => {
+      console.error("Report attachment upload failed", error);
+      await postInThread(env, thread.threadId, {
+        content: `⚠️ <@${draft.user.id}>, your attachments couldn't be uploaded. Please add them to this post.`,
+        allowed_mentions: noMentions,
+      }).catch(() => undefined);
+      return [];
+    });
     const body = withFooter(renderIssueBody({ kind: draft.kind, values, reporter, attachments }), {
       kind: draft.kind,
       reporter,
