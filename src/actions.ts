@@ -152,6 +152,18 @@ const exclusive = (labels: string[], status: StatusId) => [
   statusGithubLabel(status)!,
 ];
 
+/** Close a report into its original; the sync job then moves its followers. */
+export async function closeAsDuplicate(env: Env, issue: GhIssue, original: GhIssue) {
+  const github = new GitHub(env);
+  await patchIssue(env.DB, issue.number, { duplicateOf: original.number });
+  await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
+    state: "closed",
+    state_reason: "duplicate",
+    duplicate_issue_id: original.id,
+    labels: labelNames(issue).filter((name) => !name.startsWith("status: ")),
+  });
+}
+
 /** Apply a maintainer action on GitHub. Discord follows via the sync job. */
 export async function performAction(
   env: Env,
@@ -227,13 +239,7 @@ export async function performAction(
       const target = Number((note ?? "").replace(/[^\d]/g, ""));
       if (!target || target === number) throw new Error("Enter the number of the original report.");
       const original = await github.request<GhIssue>("GET", github.repo(`/issues/${target}`));
-      await patchIssue(env.DB, number, { duplicateOf: target });
-      await github.request("PATCH", path, {
-        state: "closed",
-        state_reason: "duplicate",
-        duplicate_issue_id: original.id,
-        labels: labels.filter((name) => !name.startsWith("status: ")),
-      });
+      await closeAsDuplicate(env, issue, original);
       message = `Closed as a duplicate of #${target}.`;
       break;
     }

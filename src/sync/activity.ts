@@ -26,7 +26,7 @@ import { GitHub } from "../github/client";
 import type { GhIssue, GhMilestone, GhPull } from "../github/types";
 import { labelNames } from "../github/types";
 import { enqueue, enqueueMany } from "../jobs/queue";
-import { referencedIssues, statusGithubLabel } from "../lifecycle";
+import { deriveStatus, referencedIssues, statusGithubLabel } from "../lifecycle";
 import { truncate } from "../util/text";
 import { NO_MIRROR } from "./markers";
 
@@ -86,6 +86,14 @@ async function setStatusLabel(
   });
 }
 
+export async function onNightly(github: GitHub, sha: string): Promise<boolean> {
+  const comparison = await github.request<{ status: string }>(
+    "GET",
+    github.repo(`/compare/${sha}...${NIGHTLY_BRANCH}`),
+  );
+  return ["ahead", "identical"].includes(comparison.status);
+}
+
 export function upsertFix(fixes: FixRef[], fix: FixRef): FixRef[] {
   const key = (value: FixRef) => (value.kind === "pr" ? `pr:${value.number}` : `sha:${value.sha}`);
   const others = fixes.filter((value) => key(value) !== key(fix));
@@ -121,42 +129,68 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
     ...referencedIssues(`${pull.title}\n${pull.body ?? ""}`),
     ...(await issuesFixedByPull(env.DB, pull.number)),
   ]);
+  // One job per report keeps a pull request with many reports inside the Worker limits.
+  await enqueueMany(
+    env,
+    [...numbers].map((number) => ({
+      kind: "pull-report" as const,
+      key: `${pull.number}:${number}`,
+      payload: { pull: pull.number, number },
+    })),
+  );
+}
+
+/** Move one report along with a pull request that fixes it, from its live GitHub status. */
+export async function syncPullReport(
+  env: Env,
+  payload: { pull: number; number: number },
+): Promise<void> {
+  const issue = await getIssue(env.DB, payload.number);
+  if (!issue?.kind) return;
+  const github = new GitHub(env);
+  const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.pull}`));
   const ref = pullFixRef(pull);
   const state = ref.state;
-  for (const number of numbers) {
-    const issue = (await getIssue(env.DB, number)) ?? null;
-    if (!issue?.kind) continue;
-    const fixes = upsertFix(issue.fixes, ref);
-    await patchIssue(env.DB, number, { fixes });
-    const open = STATUS_BY_ID.get(issue.status)!.open;
-    if (!open) continue;
-    if (state === "open" && ["new", "needs_info", "confirmed", "planned"].includes(issue.status)) {
-      await addEvent(
-        env.DB,
-        number,
-        "fix",
-        { pr: pull.number, url: pull.html_url, state },
-        pull.user?.login,
-      );
-      await setStatusLabel(env, number, "in_progress");
-    } else if (state === "merged" && issue.status !== "in_nightly") {
-      await addEvent(
-        env.DB,
-        number,
-        "fix",
-        { pr: pull.number, url: pull.html_url, state },
-        pull.user?.login,
-      );
-      await setStatusLabel(env, number, "in_nightly");
-    } else if (
-      state === "closed" &&
-      issue.status === "in_progress" &&
-      !fixes.some((fix) => fix.state !== "closed")
-    ) {
-      await setStatusLabel(env, number, "confirmed");
-    } else {
-      await enqueue(env, "sync-issue", String(number), { number });
-    }
+  const fixes = upsertFix(issue.fixes, ref);
+  await patchIssue(env.DB, issue.number, { fixes });
+  const current = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
+  const status = deriveStatus(current);
+  // A pull request the assessment linked moved the report once; after that it
+  // only follows a report that is still In Progress, so a maintainer's
+  // correction stays.
+  const named = referencedIssues(`${pull.title}\n${pull.body ?? ""}`).includes(issue.number);
+  if (state === "open" && named && ["new", "needs_info", "confirmed", "planned"].includes(status)) {
+    await addEvent(
+      env.DB,
+      issue.number,
+      "fix",
+      { pr: pull.number, url: pull.html_url, state },
+      pull.user?.login,
+    );
+    await setStatusLabel(env, issue.number, "in_progress");
+  } else if (
+    state === "merged" &&
+    STATUS_BY_ID.get(status)!.open &&
+    status !== "in_nightly" &&
+    (named || status === "in_progress") &&
+    (pull.base.ref === NIGHTLY_BRANCH || (await onNightly(github, pull.merge_commit_sha!)))
+  ) {
+    await addEvent(
+      env.DB,
+      issue.number,
+      "fix",
+      { pr: pull.number, url: pull.html_url, state },
+      pull.user?.login,
+    );
+    await setStatusLabel(env, issue.number, "in_nightly");
+  } else if (
+    state === "closed" &&
+    status === "in_progress" &&
+    !fixes.some((fix) => fix.state !== "closed")
+  ) {
+    await setStatusLabel(env, issue.number, "confirmed");
+  } else {
+    await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
   }
 }
 

@@ -558,6 +558,36 @@ export async function takePendingNote(
   return row ?? null;
 }
 
+// The latest assessment's note describes only the next announced status change:
+// that announcement consumes it, or drops it when the change was something else.
+
+export interface AssessmentNote {
+  status: StatusId;
+  text: string;
+  author: string;
+}
+
+const assessmentNoteKey = (number: number) => `assessment:status-note:${number}`;
+
+export async function setAssessmentNote(
+  db: D1Database,
+  number: number,
+  note: AssessmentNote | null,
+): Promise<void> {
+  await setState(db, assessmentNoteKey(number), JSON.stringify(note));
+}
+
+export async function takeAssessmentNote(
+  db: D1Database,
+  number: number,
+  status: StatusId,
+): Promise<{ text: string; author: string } | null> {
+  const note = await getJsonState<AssessmentNote | null>(db, assessmentNoteKey(number), null);
+  if (!note) return null;
+  await setAssessmentNote(db, number, null);
+  return note.status === status ? { text: note.text, author: note.author } : null;
+}
+
 // Webhook replay protection
 
 export async function claimDelivery(db: D1Database, id: string): Promise<boolean> {

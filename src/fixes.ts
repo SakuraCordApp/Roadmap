@@ -8,7 +8,7 @@ import { enqueueMany } from "./jobs/queue";
 import { statusGithubLabel } from "./lifecycle";
 import { reportReleases } from "./releases";
 import { neutralizeUserText } from "./report/body";
-import { recordShipment } from "./sync/activity";
+import { onNightly, recordShipment } from "./sync/activity";
 import { NO_MIRROR } from "./sync/markers";
 
 function repositoryPath(value: string): string | null {
@@ -57,14 +57,6 @@ async function resolveFix(github: GitHub, value: string): Promise<FixRef> {
     state: "merged",
     base: NIGHTLY_BRANCH,
   };
-}
-
-export async function onNightly(github: GitHub, sha: string): Promise<boolean> {
-  const comparison = await github.request<{ status: string }>(
-    "GET",
-    github.repo(`/compare/${sha}...${NIGHTLY_BRANCH}`),
-  );
-  return ["ahead", "identical"].includes(comparison.status);
 }
 
 function releaseTag(value: string): string {

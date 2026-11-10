@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { db } from "./d1";
+import { ensureSchema } from "../src/db/schema";
+import { setAssessmentNote, takeAssessmentNote } from "../src/db/store";
 import { parseMilestone, renderMilestoneDescription, visibleVersions } from "../src/roadmap";
 import { discordToGithub } from "../src/sync/comments";
 
@@ -69,5 +72,26 @@ describe("discordToGithub", () => {
     expect(text).toContain("@​octocat");
     expect(text).toContain(":sakura:");
     expect(text).not.toContain("<#4>");
+  });
+});
+
+describe("assessment notes", () => {
+  it("attribute only the status change they describe, and only once", async () => {
+    await ensureSchema(db);
+    const note = {
+      status: "in_nightly",
+      text: "Set by the assessment.",
+      author: "Triage",
+    } as const;
+    await setAssessmentNote(db, 51, note);
+    expect(await takeAssessmentNote(db, 51, "in_nightly")).toEqual({
+      text: note.text,
+      author: note.author,
+    });
+    expect(await takeAssessmentNote(db, 51, "in_nightly")).toBeNull();
+    // A different change announced first drops it, so a later one isn't misattributed.
+    await setAssessmentNote(db, 51, note);
+    expect(await takeAssessmentNote(db, 51, "confirmed")).toBeNull();
+    expect(await takeAssessmentNote(db, 51, "in_nightly")).toBeNull();
   });
 });

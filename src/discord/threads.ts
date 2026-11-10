@@ -7,6 +7,7 @@ import {
   saveThread,
   setThreadCursor,
   subscribers,
+  takeAssessmentNote,
   takePendingNote,
   threadsForIssue,
   voteCount,
@@ -277,7 +278,8 @@ async function announceStatus(
   previous: StatusId,
   thread: ThreadRecord,
 ): Promise<void> {
-  const note = await takePendingNote(env.DB, issue.number, issue.status);
+  const assessed = await takeAssessmentNote(env.DB, issue.number, issue.status);
+  const note = (await takePendingNote(env.DB, issue.number, issue.status)) ?? assessed;
   let duplicateThreadId: string | null = null;
   if (issue.status === "duplicate" && issue.duplicateOf) {
     duplicateThreadId = (await primaryThread(env.DB, issue.duplicateOf))?.threadId ?? null;

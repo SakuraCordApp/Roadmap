@@ -58,13 +58,14 @@ const resultSchema = z.object({
 
 export function parseTriageResult(comment: Pick<GhComment, "body" | "user">, number: number) {
   if (comment.user?.login !== "github-actions[bot]" || comment.user.type !== "Bot") return null;
-  const start = comment.body.indexOf(TRIAGE_MARKER);
-  if (start < 0) return null;
-  const end = comment.body.indexOf(" -->", start);
-  if (end < 0) return null;
+  // Only the envelope the publisher appends counts: the narrative above it
+  // repeats model text, which could quote a marker.
+  const body = comment.body.trimEnd();
+  const start = body.lastIndexOf(TRIAGE_MARKER);
+  if (start < 0 || !body.endsWith(" -->")) return null;
   try {
     const parsed = resultSchema.parse(
-      JSON.parse(comment.body.slice(start + TRIAGE_MARKER.length, end)),
+      JSON.parse(body.slice(start + TRIAGE_MARKER.length, -" -->".length)),
     );
     if (parsed.number !== number) return null;
     if (

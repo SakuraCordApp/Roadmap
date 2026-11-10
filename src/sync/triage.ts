@@ -1,4 +1,4 @@
-import { performAction } from "../actions";
+import { closeAsDuplicate } from "../actions";
 import { searchReports } from "../ai/search";
 import {
   checkReportVersion,
@@ -13,6 +13,7 @@ import {
   AREAS,
   PRIORITIES,
   ISSUE_TYPES,
+  NIGHTLY_BRANCH,
   REPOSITORY_SLUG,
   REPOSITORY_URL,
   STATUS_BY_ID,
@@ -25,12 +26,11 @@ import {
   getJsonState,
   getState,
   patchIssue,
-  setPendingNote,
+  setAssessmentNote,
   setState,
   type IssueRecord,
 } from "../db/store";
 import { reclassifiedKey } from "../discord/threads";
-import { onNightly } from "../fixes";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
 import { appBotLogin } from "../github/identity";
@@ -40,7 +40,7 @@ import { deriveStatus, issueKind, statusGithubLabel } from "../lifecycle";
 import { valuesFromBody } from "../report/body";
 import { sha256 } from "../util/crypto";
 import { nowIso } from "../util/text";
-import { pullFixRef, questionsAllowed, upsertFix } from "./activity";
+import { onNightly, pullFixRef, questionsAllowed, upsertFix } from "./activity";
 import { enqueueAgentStatus } from "./agents";
 
 /** Public report context for the read-only Actions agent, bounded to twelve candidates. */
@@ -142,20 +142,26 @@ export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
 /** Signs the Discord notices for status changes the assessment makes. */
 const ASSESSMENT = "Triage & investigation";
 
-/** A fix in progress: an open pull request from this repository, not a fork. */
+/** A fix in progress: an open pull request into nightly from this repository, not a fork. */
 async function openPull(github: GitHub, number: number): Promise<GhPull | null> {
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${number}`));
-  return pull.state === "open" && pull.head.repo?.full_name === REPOSITORY_SLUG ? pull : null;
+  return pull.state === "open" &&
+    pull.base.ref === NIGHTLY_BRANCH &&
+    pull.head.repo?.full_name === REPOSITORY_SLUG
+    ? pull
+    : null;
 }
 
-/** A report can absorb a duplicate unless it was itself closed as one, or declined. */
-async function acceptsDuplicates(github: GitHub, number: number): Promise<boolean> {
+/** The original, unless it was itself closed as a duplicate, or declined. */
+async function duplicateTarget(github: GitHub, number: number): Promise<GhIssue | null> {
   const target = await github.request<GhIssue>("GET", github.repo(`/issues/${number}`));
-  return (
-    !target.pull_request &&
+  return !target.pull_request &&
     !["duplicate", "declined", "cant_reproduce"].includes(deriveStatus(target))
-  );
+    ? target
+    : null;
 }
+
+const inTriageStatus = (status: StatusId) => status === "new" || status === "needs_info";
 
 /** Apply only the trusted Actions comment, independently of its Discord mirror. */
 export async function applyTriageResult(
@@ -196,7 +202,7 @@ export async function applyTriageResult(
   const findings = envelope.findings;
   const sure = (finding: keyof NonNullable<typeof findings>) => findings?.[finding] === "high";
   const status = deriveStatus(current);
-  const inTriage = status === "new" || status === "needs_info";
+  const inTriage = inTriageStatus(status);
   // Confirmed and planned reports may still move forward on verified progress.
   const advancing =
     inTriage || (Boolean(findings) && (status === "confirmed" || status === "planned"));
@@ -216,12 +222,8 @@ export async function applyTriageResult(
       ? await openPull(github, resolution.pullRequest)
       : null;
   const duplicate =
-    current.state === "open" &&
-    inTriage &&
-    sure("duplicate") &&
-    result.duplicateOf &&
-    (await acceptsDuplicates(github, result.duplicateOf))
-      ? result.duplicateOf
+    current.state === "open" && inTriage && sure("duplicate") && result.duplicateOf
+      ? await duplicateTarget(github, result.duplicateOf)
       : null;
   const regression = sure("fix") && resolution?.state === "possible_regression";
   const reportedKind = issueKind(current);
@@ -273,17 +275,21 @@ export async function applyTriageResult(
       for (const name of [...labels]) if (name.startsWith("status: ")) labels.delete(name);
       labels.add(statusGithubLabel(next)!);
     }
-    const changed = duplicate ? "duplicate" : next !== status && next !== "new" ? next : null;
-    if (changed)
-      await setPendingNote(
-        env.DB,
-        issue.number,
-        changed,
-        changed === "confirmed"
-          ? `Set by the assessment: the reported release already has the fix from ${resolution!.commit!.slice(0, 7)}, so this broke again.`
-          : "Set by the assessment.",
-        ASSESSMENT,
-      );
+    // A duplicate's note is set once the report is known to still be in triage.
+    await setAssessmentNote(
+      env.DB,
+      issue.number,
+      next && next !== status && next !== "new"
+        ? {
+            status: next,
+            text:
+              next === "confirmed"
+                ? `Set by the assessment: the reported release already has the fix from ${resolution!.commit!.slice(0, 7)}, so this broke again.`
+                : "Set by the assessment.",
+            author: ASSESSMENT,
+          }
+        : null,
+    );
     if (current.type?.name !== ISSUE_TYPES[kind].githubType) {
       patch.type = ISSUE_TYPES[kind].githubType;
       // The moved Discord post says who moved it.
@@ -300,9 +306,25 @@ export async function applyTriageResult(
   }
   patch.labels = [...labels];
   await github.request("PATCH", github.repo(`/issues/${issue.number}`), patch);
-  if (duplicate)
-    await performAction(env, issue.number, "duplicate", ASSESSMENT, { note: String(duplicate) });
+  if (duplicate) {
+    // A maintainer may have decided since this result was read.
+    const fresh = await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`));
+    if (fresh.state === "open" && inTriageStatus(deriveStatus(fresh))) {
+      await setAssessmentNote(env.DB, issue.number, {
+        status: "duplicate",
+        text: "Set by the assessment.",
+        author: ASSESSMENT,
+      });
+      await closeAsDuplicate(env, fresh, duplicate);
+    }
+  }
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
+  // The pull request may have closed before the report showed In Progress.
+  if (pull)
+    await enqueue(env, "pull-report", `${pull.number}:${issue.number}`, {
+      pull: pull.number,
+      number: issue.number,
+    });
   // triagedAt is cached before the GitHub write; this marks the result applied.
   await setState(env.DB, `triage:applied:${issue.number}`, nowIso());
   // The assessment card shows what this result changed.
