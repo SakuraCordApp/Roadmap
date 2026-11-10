@@ -103,6 +103,19 @@ describe("maintainer fix confirmation", () => {
       }).values.release,
     ).toBe(nightly.tag);
   });
+  it("fills in a fix the assessment found but could not apply", () => {
+    const fields = (modal: ReturnType<typeof fixedModal>) => modal.data.components as any[];
+    const released = fields(
+      fixedModal(51, "bug", [nightly], { commit: sha, releaseTag: nightly.tag }),
+    );
+    expect(released[0].component.options.find((o: any) => o.default).value).toBe(nightly.tag);
+    const unreleased = fields(fixedModal(51, "bug", [nightly], { commit: sha, releaseTag: null }));
+    expect(unreleased[0].component.options.find((o: any) => o.default).value).toBe("unreleased");
+    expect(unreleased[1].component.value).toBe(sha);
+    expect(
+      fields(fixedModal(51, "bug", [nightly]))[0].component.options.some((o: any) => o.default),
+    ).toBe(false);
+  });
   it("records an unreleased commit on nightly and schedules release checks without closing", async () => {
     await performAction(env, 51, "mark_fixed", "maintainer", {
       release: "unreleased",

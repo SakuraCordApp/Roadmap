@@ -13,10 +13,18 @@ import {
   PRIORITIES,
   ISSUE_TYPES,
   REPOSITORY_URL,
+  STATUS_BY_ID,
   areaLabel,
   priorityLabel,
 } from "../config";
-import { getIssue, getJsonState, getState, patchIssue, setState } from "../db/store";
+import {
+  getIssue,
+  getJsonState,
+  getState,
+  patchIssue,
+  setState,
+  type IssueRecord,
+} from "../db/store";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
 import { appBotLogin } from "../github/identity";
@@ -96,6 +104,24 @@ export async function runTriage(
         : []),
     ],
   });
+}
+
+export type FixProposal = { commit: string; releaseTag: string | null };
+
+/**
+ * A verified fix the assessment found but did not apply on its own (it needs
+ * high confidence), waiting for a maintainer to confirm it.
+ */
+export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
+  const resolution = issue.triage?.resolution;
+  if (
+    !resolution?.commit ||
+    !["fixed_unreleased", "fixed_nightly", "fixed_regular"].includes(resolution.state) ||
+    !STATUS_BY_ID.get(issue.status)!.open ||
+    issue.fixes.some((fix) => fix.sha === resolution.commit)
+  )
+    return null;
+  return { commit: resolution.commit, releaseTag: resolution.releaseTag };
 }
 
 /** Apply only the trusted Actions comment, independently of its Discord mirror. */
