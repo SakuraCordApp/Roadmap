@@ -202,6 +202,8 @@ export async function applyTriageResult(
   patch.labels = [...labels];
   await github.request("PATCH", github.repo(`/issues/${issue.number}`), patch);
   await enqueue(env, "sync-issue", String(issue.number), { number: issue.number });
+  // triagedAt is cached before the GitHub write; this marks the result applied.
+  await setState(env.DB, `triage:applied:${issue.number}`, nowIso());
   // The assessment card shows what this result changed.
   await enqueue(env, "agent-status", `${issue.number}:investigate`, {
     number: issue.number,

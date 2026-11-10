@@ -1,5 +1,5 @@
 import { REPOSITORY, statusLabel } from "../config";
-import { getIssue, primaryThread, type IssueRecord } from "../db/store";
+import { getIssue, getState, primaryThread, type IssueRecord } from "../db/store";
 import { agentCard, type WorkflowJob } from "../discord/agent-card";
 import { DiscordError, withWritableThread } from "../discord/rest";
 import { discordClient } from "../discord/threads";
@@ -70,8 +70,12 @@ export async function pollAgentRuns(env: Env) {
 }
 
 /** What a finished assessment did to the report, so the card doesn't stop at "Completed". */
-function assessmentOutcome(issue: IssueRecord | null, run: WorkflowRun): string {
-  if (!issue?.triagedAt || Date.parse(issue.triagedAt) < Date.parse(run.run_started_at))
+function assessmentOutcome(
+  issue: IssueRecord | null,
+  appliedAt: string | null,
+  run: WorkflowRun,
+): string {
+  if (!issue || !appliedAt || Date.parse(appliedAt) < Date.parse(run.run_started_at))
     return "⏳ Updating the report…";
   switch (issue.status) {
     case "needs_info":
@@ -132,7 +136,11 @@ export async function syncAgentStatus(
   if (!latest || latest.run_id !== row.run_id || latest.attempt !== row.attempt) return;
   const outcome =
     row.kind === "investigate" && run.conclusion === "success"
-      ? assessmentOutcome(await getIssue(env.DB, row.issue_number), run)
+      ? assessmentOutcome(
+          await getIssue(env.DB, row.issue_number),
+          await getState(env.DB, `triage:applied:${row.issue_number}`),
+          run,
+        )
       : undefined;
   const card = agentCard(row.kind, run, jobs, latest.result_text, pull, outcome);
   const hash = await sha256(JSON.stringify(card));
