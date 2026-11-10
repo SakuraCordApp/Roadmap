@@ -12,6 +12,7 @@ const state = vi.hoisted(() => ({
   target: {} as any,
   pull: {} as any,
   compare: "ahead",
+  fixedBy: [] as number[],
   duringLookup: undefined as (() => void) | undefined,
   values: new Map<string, string>(),
   notes: new Map<string, { text: string; author: string }>(),
@@ -45,6 +46,7 @@ vi.mock("../src/db/store", () => ({
     if (note) state.notes.set(note.status, { text: note.text, author: note.author });
   },
   addEvent: async () => undefined,
+  issuesFixedByPull: async () => state.fixedBy,
   setPendingNote: async () => undefined,
 }));
 vi.mock("../src/jobs/queue", () => ({
@@ -61,9 +63,11 @@ const refreshComment = () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  state.enqueue.mockReset();
   state.values.clear();
   state.notes.clear();
   state.compare = "ahead";
+  state.fixedBy = [];
   state.target = { number: 52, state: "open", state_reason: null, labels: ["status: confirmed"] };
   state.pull = {
     number: 60,
@@ -445,6 +449,69 @@ describe("status findings", () => {
     state.issue.status = "in_progress";
     Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
     await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: in nightly"]);
+  });
+
+  it("unlinks a pull request whose description no longer names the report", async () => {
+    state.pull.body = "Fixes #51";
+    await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: in progress"]);
+    state.issue.status = "in_progress";
+    state.fixedBy = [51];
+    state.pull.body = "";
+    await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+  });
+
+  it("doesn't add the line again on a retry after a maintainer removed it", async () => {
+    fixedByPull();
+    state.enqueue.mockImplementation(async (_env: unknown, kind: string) => {
+      if (kind === "pull" && !state.pull.body.includes("removed")) {
+        state.pull.body = "removed";
+        throw new Error("Temporary database failure");
+      }
+    });
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    expect(state.pull.body).toBe("removed");
+    await apply();
+    expect(state.pull.body).toBe("removed");
+    expect(state.enqueue).toHaveBeenCalledWith(env, "pull", "60", { number: 60 });
+  });
+
+  it("doesn't reclassify again on a retry after a maintainer restored the kind", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "high" });
+    state.enqueue.mockRejectedValueOnce(new Error("Temporary database failure"));
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    expect(state.current.type).toBe("Feature");
+    state.current.type = { name: "Bug" };
+    await apply();
+    expect(state.current.type).toEqual({ name: "Bug" });
+  });
+
+  it("posts the public fix note once, retrying it if it failed", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "POST" && args[1] === "/issues/51/comments" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    expect(state.issue.fixes[0].sha).toBe(sha);
+    state.enqueue.mockRejectedValueOnce(new Error("Temporary database failure"));
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    await apply();
+    const notes = state.request.mock.calls.filter(
+      ([method, path]) => method === "POST" && path === "/issues/51/comments",
+    );
+    // One failed, one posted.
+    expect(notes).toHaveLength(2);
     expect(status()).toEqual(["status: in nightly"]);
   });
 

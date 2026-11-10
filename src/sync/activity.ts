@@ -11,6 +11,7 @@ import {
   addEvent,
   getIssue,
   getState,
+  issuesFixedByPull,
   listIssues,
   patchIssue,
   primaryThread,
@@ -103,6 +104,17 @@ export async function syncPull(env: Env, payload: { number: number }): Promise<v
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${payload.number}`));
   if (pull.base.ref === DEFAULT_BRANCH && pull.head.ref === NIGHTLY_BRANCH) return;
   const numbers = referencedIssues(`${pull.title}\n${pull.body ?? ""}`);
+  // A report the description no longer names loses the pull request as a fix,
+  // and leaves In Progress as it would if the pull request closed unmerged.
+  for (const number of await issuesFixedByPull(env.DB, pull.number)) {
+    if (numbers.includes(number)) continue;
+    const issue = (await getIssue(env.DB, number))!;
+    const fixes = issue.fixes.filter((fix) => !(fix.kind === "pr" && fix.number === pull.number));
+    await patchIssue(env.DB, number, { fixes });
+    if (issue.status === "in_progress" && !fixes.some((fix) => fix.state !== "closed"))
+      await setStatusLabel(env, number, "confirmed");
+    else await enqueue(env, "sync-issue", String(number), { number });
+  }
   for (const number of numbers) {
     const issue = (await getIssue(env.DB, number)) ?? null;
     if (!issue?.kind) continue;

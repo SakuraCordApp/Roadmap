@@ -126,6 +126,18 @@ export async function listIssues(db: D1Database): Promise<IssueRecord[]> {
   return results.map(toIssue);
 }
 
+/** Reports that record a pull request as a fix. */
+export async function issuesFixedByPull(db: D1Database, pull: number): Promise<number[]> {
+  const { results } = await db
+    .prepare(
+      `SELECT DISTINCT number FROM issues, json_each(issues.fixes_json) AS fix
+       WHERE json_extract(fix.value,'$.kind')='pr' AND json_extract(fix.value,'$.number')=?`,
+    )
+    .bind(pull)
+    .all<{ number: number }>();
+  return results.map((row) => row.number);
+}
+
 export async function saveIssue(db: D1Database, issue: IssueRecord): Promise<void> {
   await db
     .prepare(

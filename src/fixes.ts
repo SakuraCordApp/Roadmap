@@ -90,12 +90,10 @@ export async function markFixed(
     const fix = await nightlyFix(github, input.reference ?? "");
     if (!fix)
       throw new Error("That fix has not landed on nightly yet. Use Mark in progress instead.");
-    await recordNightlyFix(
-      env,
-      issue,
-      fix,
-      `A maintainer confirmed this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.${attribution}`,
-    );
+    await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
+      body: `${NO_MIRROR}\nA maintainer confirmed this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.${attribution}`,
+    });
+    await recordNightlyFix(env, issue, fix);
     if (note) await setPendingNote(env.DB, issue.number, "in_nightly", note, actor);
     await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
       labels: [
@@ -140,16 +138,10 @@ export async function nightlyFix(github: GitHub, reference: string): Promise<Fix
 }
 
 /**
- * Record a fix on nightly as Mark as fixed does, apart from moving the report to
- * In Nightly, which the caller does: the fix, replacing a shipment it
- * supersedes, and a public note.
+ * Record a fix on nightly as Mark as fixed does, replacing a shipment it
+ * supersedes. Moving the report to In Nightly is the caller's.
  */
-export async function recordNightlyFix(
-  env: Env,
-  issue: IssueRecord,
-  fix: FixRef,
-  note: string,
-): Promise<void> {
+export async function recordNightlyFix(env: Env, issue: IssueRecord, fix: FixRef): Promise<void> {
   await patchIssue(env.DB, issue.number, {
     shippedIn: null,
     shippedStableIn: null,
@@ -163,10 +155,6 @@ export async function recordNightlyFix(
           ),
           fix,
         ],
-  });
-  const github = new GitHub(env);
-  await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
-    body: `${NO_MIRROR}\n${note}`,
   });
 }
 
