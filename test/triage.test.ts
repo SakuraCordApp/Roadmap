@@ -632,6 +632,15 @@ describe("status findings", () => {
     expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
   });
 
+  it("records a pull request that merged while the result waited as the fix", async () => {
+    fixedByPull();
+    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+    await apply();
+    expect(state.pull.body).toBe("");
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes).toEqual([expect.objectContaining({ kind: "pr", number: 60, sha })]);
+  });
+
   it("links only pull requests into nightly", async () => {
     result.triage.resolution = {
       state: "unresolved",

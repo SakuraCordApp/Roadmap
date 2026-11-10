@@ -144,12 +144,10 @@ export function pendingFixProposal(issue: IssueRecord): FixProposal | null {
 /** Signs the Discord notices for status changes the assessment makes. */
 const ASSESSMENT = "Triage & investigation";
 
-/** A fix in progress: an open pull request into nightly from this repository, not a fork. */
-async function openPull(github: GitHub, number: number): Promise<GhPull | null> {
+/** A pull request into nightly from this repository, not a fork. */
+async function nightlyPull(github: GitHub, number: number): Promise<GhPull | null> {
   const pull = await github.request<GhPull>("GET", github.repo(`/pulls/${number}`));
-  return pull.state === "open" &&
-    pull.base.ref === NIGHTLY_BRANCH &&
-    pull.head.repo?.full_name === REPOSITORY_SLUG
+  return pull.base.ref === NIGHTLY_BRANCH && pull.head.repo?.full_name === REPOSITORY_SLUG
     ? pull
     : null;
 }
@@ -262,17 +260,20 @@ export async function applyTriageResult(
     advancing &&
     !result.needsInformation &&
     (findings ? !foundDuplicate : !result.duplicateOf);
-  const fix =
+  const commitFix =
     progress &&
     (findings ? sure("fix") : envelope.confidence === "high") &&
     resolution?.commit &&
     FIXED_STATES.includes(resolution.state)
       ? await nightlyFix(github, resolution.commit)
       : null;
-  const pull =
-    progress && !fix && sure("pullRequest") && resolution?.pullRequest
-      ? await openPull(github, resolution.pullRequest)
+  const found =
+    progress && !commitFix && sure("pullRequest") && resolution?.pullRequest
+      ? await nightlyPull(github, resolution.pullRequest)
       : null;
+  const pull = found?.state === "open" ? found : null;
+  // A pull request that merged while the result waited is a fix on nightly.
+  const fix = commitFix ?? (found?.merged ? await nightlyFix(github, String(found.number)) : null);
   const releases = fix ? await reportReleases(env) : [];
   const mayAsk =
     inTriage &&
