@@ -18,6 +18,7 @@ import {
   type FixRef,
   type IssueRecord,
 } from "../db/store";
+import { threadNotice } from "../discord/cards";
 import { noMentions } from "../discord/rest";
 import { postInThread } from "../discord/threads";
 import type { Env } from "../env";
@@ -323,9 +324,8 @@ async function announceStableRelease(env: Env, issue: IssueRecord, version: stri
     env,
     thread.threadId,
     {
-      content: `🌸 **Now in the regular release: SakuraCord ${version}.**`,
+      ...threadNotice(`🌸 **Now in the regular release: SakuraCord ${version}.**`, "shipped"),
       allowed_mentions: noMentions,
-      flags: 1 << 2,
     },
     { nonceKey: `stable:${issue.number}:${version}` },
   );

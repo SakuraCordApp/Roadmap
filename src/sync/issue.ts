@@ -11,6 +11,7 @@ import {
   subscribers,
   type IssueRecord,
 } from "../db/store";
+import { threadNotice } from "../discord/cards";
 import { projectIssue, discordClient } from "../discord/threads";
 import type { Env } from "../env";
 import { GitHub } from "../github/client";
@@ -195,9 +196,10 @@ async function mergeIntoCanonical(env: Env, duplicate: IssueRecord, canonical: n
       .post(
         `/channels/${target.threadId}/messages`,
         {
-          content: `🔁 **#${duplicate.number} was merged into this report**${moved ? ` — ${moved} more ${moved === 1 ? "person is" : "people are"} following it now` : ""}.`,
+          ...threadNotice(
+            `🔁 **#${duplicate.number} was merged into this report**${moved ? ` — ${moved} more ${moved === 1 ? "person is" : "people are"} following it now` : ""}.`,
+          ),
           allowed_mentions: { parse: [] },
-          flags: 1 << 2,
         },
         { nonceKey: `merge:${duplicate.number}:${canonical}` },
       )
