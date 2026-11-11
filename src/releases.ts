@@ -14,9 +14,11 @@ export interface ReportRelease {
   publishedAt: string;
 }
 const CACHE_KEY = "github:supported-releases";
+/** GitHub's free-text version field invites a channel suffix: "0.1.7 Beta 6 (nightly)". */
 export function normalizeVersion(value: string): string {
   return value
     .trim()
+    .replace(/\s*\((?:nightly|regular)\)$/i, "")
     .replace(/^v(?=\d)/i, "")
     .replace(/-beta-/i, " beta ")
     .replace(/\s+/g, " ")
@@ -112,11 +114,13 @@ export async function checkReportVersion(env: Env, issue: GhIssue): Promise<bool
       labels: [...labels.filter((label) => !label.startsWith("status: ")), "status: needs info"],
     });
   const noticeKey = `report:version-notice:${issue.number}`;
-  if ((await getState(env.DB, noticeKey)) !== value) {
+  const normalized = normalizeVersion(value);
+  const noticed = await getState(env.DB, noticeKey);
+  if (noticed === null || normalizeVersion(noticed) !== normalized) {
     await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
       body: `Please update and retest on ${releases.map((r) => `[${r.version} (${r.channel})](${r.url})`).join(" or ")}, then edit the **SakuraCord version** field in this issue. Only the latest published nightly and regular releases are supported. Assessment will start after the version is corrected. A regular-release user does not need to switch to nightly.`,
     });
-    await setState(env.DB, noticeKey, value);
+    await setState(env.DB, noticeKey, normalized);
   }
   return false;
 }
