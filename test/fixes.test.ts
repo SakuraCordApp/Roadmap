@@ -103,6 +103,19 @@ describe("maintainer fix confirmation", () => {
       }).values.release,
     ).toBe(nightly.tag);
   });
+  it("fills in a fix the assessment found but could not apply", () => {
+    const fields = (modal: ReturnType<typeof fixedModal>) => modal.data.components as any[];
+    const released = fields(
+      fixedModal(51, "bug", [nightly], { commit: sha, releaseTag: nightly.tag }),
+    );
+    expect(released[0].component.options.find((o: any) => o.default).value).toBe(nightly.tag);
+    const unreleased = fields(fixedModal(51, "bug", [nightly], { commit: sha, releaseTag: null }));
+    expect(unreleased[0].component.options.find((o: any) => o.default).value).toBe("unreleased");
+    expect(unreleased[1].component.value).toBe(sha);
+    expect(
+      fields(fixedModal(51, "bug", [nightly]))[0].component.options.some((o: any) => o.default),
+    ).toBe(false);
+  });
   it("records an unreleased commit on nightly and schedules release checks without closing", async () => {
     await performAction(env, 51, "mark_fixed", "maintainer", {
       release: "unreleased",
@@ -192,5 +205,40 @@ describe("maintainer fix confirmation", () => {
     expect(state.current.state).toBe("open");
     await shipIssue(env, { number: 51, tag: nightly.tag, url: nightly.url });
     expect(state.current.state).toBe("closed");
+  });
+  it("leaves a report a maintainer declined before its queued release check runs", async () => {
+    await performAction(env, 51, "mark_fixed", "maintainer", {
+      release: "unreleased",
+      reference: sha,
+    });
+    state.issue.status = "declined";
+    state.request.mockClear();
+    await shipIssue(env, { number: 51, tag: nightly.tag, url: nightly.url });
+    expect(state.request).not.toHaveBeenCalled();
+    expect(state.issue.shippedIn).toBeNull();
+  });
+  it("doesn't announce a regular release for a shipped report since declined on GitHub", async () => {
+    await performAction(env, 51, "mark_fixed", "maintainer", { release: nightly.tag });
+    state.issue.state = "closed";
+    state.issue.status = "shipped";
+    // Reopened and declined on GitHub while sync was behind.
+    state.current.state_reason = "not_planned";
+    await shipIssue(env, {
+      number: 51,
+      tag: "v0.1.6",
+      url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v0.1.6",
+    });
+    expect(state.issue.shippedStableIn).toBeNull();
+  });
+  it("leaves a report declined on GitHub before the cache caught up", async () => {
+    await performAction(env, 51, "mark_fixed", "maintainer", {
+      release: "unreleased",
+      reference: sha,
+    });
+    state.current.state = "closed";
+    state.current.state_reason = "not_planned";
+    await shipIssue(env, { number: 51, tag: nightly.tag, url: nightly.url });
+    expect(state.current.state_reason).toBe("not_planned");
+    expect(state.issue.shippedIn).toBeNull();
   });
 });

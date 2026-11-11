@@ -1,6 +1,7 @@
 import { markFixed } from "./fixes";
 import { AGENT_LABELS, STATUS_BY_ID, type StatusId } from "./config";
 import { getIssue, patchIssue, setPendingNote } from "./db/store";
+import { resetAnswerReassessments } from "./sync/activity";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
 import { labelNames, type GhIssue, type GhMilestone } from "./github/types";
@@ -151,6 +152,13 @@ const exclusive = (labels: string[], status: StatusId) => [
   statusGithubLabel(status)!,
 ];
 
+/** Closes a report into its original; the sync job then moves its followers. */
+export const duplicateClosure = (original: GhIssue) => ({
+  state: "closed",
+  state_reason: "duplicate",
+  duplicate_issue_id: original.id,
+});
+
 /** Apply a maintainer action on GitHub. Discord follows via the sync job. */
 export async function performAction(
   env: Env,
@@ -228,9 +236,7 @@ export async function performAction(
       const original = await github.request<GhIssue>("GET", github.repo(`/issues/${target}`));
       await patchIssue(env.DB, number, { duplicateOf: target });
       await github.request("PATCH", path, {
-        state: "closed",
-        state_reason: "duplicate",
-        duplicate_issue_id: original.id,
+        ...duplicateClosure(original),
         labels: labels.filter((name) => !name.startsWith("status: ")),
       });
       message = `Closed as a duplicate of #${target}.`;
@@ -265,6 +271,7 @@ export async function performAction(
       message = "Reopened.";
       break;
     case "investigate":
+      await resetAnswerReassessments(env, number);
       if (labels.includes(AGENT_LABELS.investigate.name)) {
         await github.request(
           "DELETE",

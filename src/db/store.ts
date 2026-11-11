@@ -546,6 +546,49 @@ export async function takePendingNote(
   return row ?? null;
 }
 
+// The latest assessment's note describes only the status change it made: the
+// next announcement uses or drops it, and so does any sync after that result
+// was applied, so a coalesced or superseded change can't reuse it later.
+
+export interface AssessmentNote {
+  status: StatusId;
+  text: string;
+  author: string;
+}
+
+const assessmentNoteKey = (number: number) => `assessment:status-note:${number}`;
+
+export async function setAssessmentNote(
+  db: D1Database,
+  number: number,
+  note: AssessmentNote | null,
+): Promise<void> {
+  await setState(db, assessmentNoteKey(number), JSON.stringify(note && { ...note, at: nowIso() }));
+}
+
+export async function takeAssessmentNote(
+  db: D1Database,
+  number: number,
+  announced: StatusId,
+): Promise<{ text: string; author: string } | null> {
+  const note = await getJsonState<AssessmentNote | null>(db, assessmentNoteKey(number), null);
+  if (!note) return null;
+  await setAssessmentNote(db, number, null);
+  return note.status === announced ? { text: note.text, author: note.author } : null;
+}
+
+/** A sync that announced nothing drops the note, unless its result is still being applied. */
+export async function dropAssessmentNote(db: D1Database, number: number): Promise<void> {
+  const note = await getJsonState<(AssessmentNote & { at: string }) | null>(
+    db,
+    assessmentNoteKey(number),
+    null,
+  );
+  if (!note) return;
+  const applied = await getState(db, `triage:applied:${number}`);
+  if (applied && applied >= note.at) await setAssessmentNote(db, number, null);
+}
+
 // Webhook replay protection
 
 export async function claimDelivery(db: D1Database, id: string): Promise<boolean> {

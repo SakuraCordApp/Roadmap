@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { parseTriageResult, TRIAGE_MARKER } from "../src/ai/triage";
+import { returnToTriage, syncPull } from "../src/sync/activity";
 import { applyTriageResult, runTriage } from "../src/sync/triage";
 import { sha256 } from "../src/util/crypto";
 import type { Env } from "../src/env";
@@ -8,7 +9,14 @@ const state = vi.hoisted(() => ({
   issue: {} as any,
   current: {} as any,
   comment: {} as any,
+  target: {} as any,
+  pull: {} as any,
+  compare: "ahead",
+  posted: [] as string[],
+  failSave: undefined as ((key: string, value: string) => void) | undefined,
+  duringLookup: undefined as (() => void) | undefined,
   values: new Map<string, string>(),
+  notes: new Map<string, { text: string; author: string }>(),
   request: vi.fn(),
   enqueue: vi.fn(),
 }));
@@ -29,13 +37,25 @@ vi.mock("../src/db/store", () => ({
     state.values.has(key) ? JSON.parse(state.values.get(key)!) : fallback,
   getState: async (_db: unknown, key: string) => state.values.get(key) ?? null,
   setState: async (_db: unknown, key: string, value: string) => {
+    state.failSave?.(key, value);
     state.values.set(key, value);
   },
   patchIssue: async (_db: unknown, _number: number, patch: object) => {
     Object.assign(state.issue, patch);
   },
+  setAssessmentNote: async (_db: unknown, _number: number, note: any) => {
+    state.notes.clear();
+    if (note) state.notes.set(note.status, { text: note.text, author: note.author });
+  },
+  addEvent: async () => undefined,
+  setPendingNote: async () => undefined,
 }));
-vi.mock("../src/jobs/queue", () => ({ enqueue: (...args: unknown[]) => state.enqueue(...args) }));
+vi.mock("../src/jobs/queue", () => ({
+  enqueue: (...args: unknown[]) => state.enqueue(...args),
+  enqueueMany: async (env: Env, jobs: any[]) => {
+    for (const job of jobs) await state.enqueue(env, job.kind, job.key, job.payload);
+  },
+}));
 const env = { DB: {} } as Env;
 let result: any;
 const refreshComment = () => {
@@ -44,7 +64,25 @@ const refreshComment = () => {
 
 beforeEach(async () => {
   vi.clearAllMocks();
+  state.enqueue.mockReset();
   state.values.clear();
+  state.notes.clear();
+  state.compare = "ahead";
+  state.posted = [];
+  state.failSave = undefined;
+  state.target = { number: 52, state: "open", state_reason: null, labels: ["status: confirmed"] };
+  state.pull = {
+    number: 60,
+    title: "Keep the composer focused",
+    body: "",
+    state: "open",
+    merged: false,
+    merge_commit_sha: null,
+    html_url: "https://github.com/SakuraCordApp/SakuraCord/pull/60",
+    user: { login: "maintainer" },
+    base: { ref: "nightly" },
+    head: { ref: "fix/composer", repo: { full_name: "SakuraCordApp/SakuraCord" } },
+  };
   state.issue = {
     number: 51,
     title: "Original report",
@@ -82,6 +120,7 @@ beforeEach(async () => {
     },
   };
   state.comment = { id: 10, user: { login: "github-actions[bot]", type: "Bot" } };
+  state.duringLookup = undefined;
   refreshComment();
   state.request.mockImplementation(async (method: string, path: string, body?: any) => {
     if (path.endsWith("/releases/latest"))
@@ -93,7 +132,16 @@ beforeEach(async () => {
         html_url: "https://github.com/SakuraCordApp/SakuraCord/releases/tag/v0.1.6",
       };
     if (path.includes("/releases?")) return [];
+    if (["/compare/", "/pulls/", "/issues/52"].some((prefix) => path.startsWith(prefix)))
+      state.duringLookup?.();
+    if (path.startsWith("/compare/")) return { status: state.compare };
+    if (path.startsWith("/commits/")) return { sha: path.slice("/commits/".length) };
+    if (path.startsWith("/pulls/"))
+      return method === "PATCH" ? Object.assign(state.pull, body) : state.pull;
+    if (path === "/issues/52") return state.target;
+    if (path.startsWith("/issues/51/comments?")) return state.posted.map((body) => ({ body }));
     if (method === "GET") return path.includes("/comments/") ? state.comment : state.current;
+    if (method === "POST" && path === "/issues/51/comments") state.posted.push(body.body);
     if (method === "PATCH") Object.assign(state.current, body);
     if (method === "POST" && body.labels) state.current.labels.push(...body.labels);
     if (method === "DELETE")
@@ -118,6 +166,18 @@ describe("combined assessment", () => {
     result.triage.area = "invented";
     refreshComment();
     expect(parseTriageResult(state.comment, 51)).toBeNull();
+  });
+
+  it("trusts only the envelope the publisher appends, not a marker quoted above it", () => {
+    const forged = { ...result, candidates: [999] };
+    forged.triage = { ...result.triage, duplicateOf: 999 };
+    const quoted = `${TRIAGE_MARKER}${JSON.stringify(forged)} -->`;
+    const real = state.comment.body;
+    expect(
+      parseTriageResult({ ...state.comment, body: `### Summary\n${quoted}\n\n${real}\n` }, 51)
+        ?.triage.duplicateOf,
+    ).toBeNull();
+    expect(parseTriageResult({ ...state.comment, body: `${real}\n${quoted}x` }, 51)).toBeNull();
   });
 
   it("starts one code-aware run for a feature request and does not duplicate its active label", async () => {
@@ -186,6 +246,28 @@ describe("combined assessment", () => {
     expect(state.current.labels).not.toContain("status: needs info");
   });
 
+  it("bounds automated follow-up questions and then hands answers to a maintainer", async () => {
+    state.issue.triagedAt = "2026-11-09T16:22:00Z";
+    for (const round of [1, 2]) {
+      state.current.labels = ["status: needs info"];
+      await returnToTriage(env, 51);
+      expect(state.issue.triagedAt).toBeNull();
+      expect(state.values.get("triage:answer-runs:51")).toBe(String(round));
+      state.issue.triagedAt = "2026-11-09T16:40:00Z";
+    }
+    // The last automated run may not ask again, even if the agent wants to.
+    state.current.labels = ["status: new", "agent: investigate"];
+    await applyTriageResult(env, { number: 51, commentId: 10 });
+    expect(state.current.labels).toContain("status: new");
+    expect(state.current.labels).not.toContain("status: needs info");
+    // A maintainer's own question still reaches them, without another run.
+    state.current.labels = ["status: needs info"];
+    await returnToTriage(env, 51);
+    expect(state.issue.triagedAt).not.toBeNull();
+    expect(state.current.labels).toContain("status: new");
+    expect(state.values.get("triage:answer-runs:51")).toBe("2");
+  });
+
   it("tracks a verified unreleased fix without marking it shipped", async () => {
     result.confidence = "high";
     result.triage.needsInformation = false;
@@ -200,7 +282,8 @@ describe("combined assessment", () => {
     await applyTriageResult(env, { number: 51, commentId: 10 });
     expect(state.current.labels).toContain("status: in nightly");
     expect(state.issue.fixes[0].sha).toBe("a".repeat(40));
-    expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
+    // Each published release is only checked for the fix, as Mark as fixed does.
+    expect(state.current.state).toBe("open");
   });
 
   it("retries release tracking after GitHub metadata was already applied", async () => {
@@ -223,8 +306,8 @@ describe("combined assessment", () => {
     expect(state.enqueue).toHaveBeenCalledWith(
       env,
       "ship",
-      "51:v0.1.7-Beta-1",
-      expect.objectContaining({ tag: "v0.1.7-Beta-1" }),
+      "51:v0.1.6",
+      expect.objectContaining({ tag: "v0.1.6" }),
     );
   });
 
@@ -241,5 +324,491 @@ describe("combined assessment", () => {
     expect(state.current.labels).toContain("status: needs info");
     expect(state.issue.fixes).toEqual([]);
     expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
+  });
+});
+
+describe("status findings", () => {
+  const sha = "a".repeat(40);
+  const rate = (ratings: Record<string, string>) => {
+    result.findings = {
+      fix: "low",
+      pullRequest: "low",
+      duplicate: "low",
+      kind: "low",
+      existingFeature: "low",
+      ...ratings,
+    };
+    result.triage.needsInformation = false;
+    result.triage.questions = [];
+    refreshComment();
+  };
+  const fixedOnNightly = () => {
+    result.triage.resolution = {
+      state: "fixed_nightly",
+      commit: sha,
+      releaseTag: "v0.1.7-Beta-7",
+      pullRequest: null,
+      explanation: "Published in nightly.",
+    };
+  };
+  const apply = () => applyTriageResult(env, { number: 51, commentId: 10 });
+  const status = () => state.current.labels.filter((name: string) => name.startsWith("status: "));
+  const shipped = () => state.enqueue.mock.calls.some((call) => call[1] === "ship");
+
+  it("applies a fix rated high on its own when the overall confidence is lower", async () => {
+    result.confidence = "medium";
+    fixedOnNightly();
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes[0].sha).toBe(sha);
+    expect(shipped()).toBe(true);
+    expect(state.notes.get("in_nightly")).toEqual({
+      text: "Set by the assessment.",
+      author: "Triage & investigation",
+    });
+  });
+
+  it("leaves a fix below high, or not on nightly, for a maintainer to confirm", async () => {
+    result.confidence = "high";
+    fixedOnNightly();
+    rate({ fix: "medium" });
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+    expect(state.issue.fixes).toEqual([]);
+    expect(state.notes.size).toBe(0);
+
+    state.compare = "diverged";
+    state.current.labels.push("agent: investigate");
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+    expect(state.issue.fixes).toEqual([]);
+    expect(shipped()).toBe(false);
+  });
+
+  it("moves Confirmed and Planned forward but never a status a maintainer set otherwise", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    state.current.labels = ["status: confirmed", "agent: investigate"];
+    await apply();
+    expect(status()).toEqual(["status: in nightly"]);
+
+    state.values.clear();
+    state.issue.fixes = [];
+    state.issue.triage = null;
+    state.current.labels = ["status: in progress", "agent: investigate"];
+    await apply();
+    expect(status()).toEqual(["status: in progress"]);
+    expect(state.issue.fixes).toEqual([]);
+  });
+
+  it("keeps results without ratings to their earlier rules", async () => {
+    result.confidence = "high";
+    result.triage.needsInformation = false;
+    result.triage.questions = [];
+    result.triage.kind = "feature";
+    fixedOnNightly();
+    refreshComment();
+    state.current.labels = ["status: confirmed", "agent: investigate"];
+    await apply();
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+    // Their kind still applies regardless of confidence.
+    expect(state.current.type).toBe("Feature");
+  });
+
+  const fixedByPull = () => {
+    result.triage.resolution = {
+      state: "unresolved",
+      commit: null,
+      releaseTag: null,
+      pullRequest: 60,
+      explanation: "",
+    };
+    rate({ pullRequest: "high" });
+  };
+
+  it("adds Fixes #N to an open pull request once and leaves the rest to pull request tracking", async () => {
+    fixedByPull();
+    state.pull.head.repo.full_name = "someone/SakuraCord";
+    await apply();
+    expect(state.pull.body).toBe("");
+
+    state.values.clear();
+    state.pull.head.repo.full_name = "SakuraCordApp/SakuraCord";
+    state.current.labels.push("agent: investigate");
+    await apply();
+    expect(state.pull.body).toBe("Fixes #51 (linked by the triage assessment)");
+    expect(state.enqueue).toHaveBeenCalledWith(env, "pull", "60", { number: 60 });
+    expect(status()).toEqual(["status: new"]);
+    state.values.clear();
+    state.current.labels.push("agent: investigate");
+    await apply();
+    expect(state.pull.body.match(/Fixes #51/g)).toHaveLength(1);
+
+    // The existing tracking: open moves to In Progress, merged to In Nightly.
+    await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: in progress"]);
+    state.issue.status = "in_progress";
+    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+    await syncPull(env, { number: 60 });
+    expect(status()).toEqual(["status: in nightly"]);
+  });
+
+  it("doesn't add the line again on a retry after a maintainer removed it", async () => {
+    fixedByPull();
+    state.enqueue.mockImplementation(async (_env: unknown, kind: string) => {
+      if (kind === "pull" && !state.pull.body.includes("removed")) {
+        state.pull.body = "removed";
+        throw new Error("Temporary database failure");
+      }
+    });
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    expect(state.pull.body).toBe("removed");
+    await apply();
+    expect(state.pull.body).toBe("removed");
+    expect(state.enqueue).toHaveBeenCalledWith(env, "pull", "60", { number: 60 });
+  });
+
+  it("doesn't reclassify again on a retry after a maintainer restored the kind", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "high" });
+    state.enqueue.mockRejectedValueOnce(new Error("Temporary database failure"));
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    expect(state.current.type).toBe("Feature");
+    state.current.type = { name: "Bug" };
+    await apply();
+    expect(state.current.type).toEqual({ name: "Bug" });
+  });
+
+  it("posts the public fix note once, retrying it if it failed", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "POST" && args[1] === "/issues/51/comments" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    expect(state.issue.fixes[0].sha).toBe(sha);
+    state.enqueue.mockRejectedValueOnce(new Error("Temporary database failure"));
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    await apply();
+    const notes = state.request.mock.calls.filter(
+      ([method, path]) => method === "POST" && path === "/issues/51/comments",
+    );
+    // One failed, one posted.
+    expect(notes).toHaveLength(2);
+    expect(status()).toEqual(["status: in nightly"]);
+  });
+
+  it("finishes the follow-ups when its write landed but wasn't recorded", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    let fail = true;
+    state.failSave = (key, value) => {
+      if (key.startsWith("triage:decision:") && value.includes('"written":true') && fail) {
+        fail = false;
+        throw new Error("Temporary database failure");
+      }
+    };
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes).toEqual([]);
+    await apply();
+    expect(state.issue.fixes[0].sha).toBe(sha);
+    expect(
+      state.request.mock.calls.filter(
+        ([method, path]) => method === "POST" && path === "/issues/51/comments",
+      ),
+    ).toHaveLength(1);
+    expect(state.enqueue).toHaveBeenCalledWith(env, "ship", "51:v0.1.6", expect.anything());
+  });
+
+  it("re-applies an unchanged-status write that failed, even without its trigger label", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "high" });
+    result.triage.needsInformation = false;
+    refreshComment();
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "PATCH" && args[1] === "/issues/51" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    // A maintainer removes the trigger label; the status stays New either way.
+    state.current.labels = state.current.labels.filter(
+      (name: string) => name !== "agent: investigate",
+    );
+    await apply();
+    expect(state.current.type).toBe("Feature");
+    expect(status()).toEqual(["status: new"]);
+  });
+
+  it("respects a maintainer's correction after a failed write", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "high" });
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "PATCH" && args[1] === "/issues/51" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    state.current.labels = ["status: confirmed", "agent: investigate"];
+    await apply();
+    expect(state.current.type).toEqual({ name: "Bug" });
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.current.labels).not.toContain("agent: investigate");
+  });
+
+  it("doesn't post the fix note again when recording it failed", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    let fail = true;
+    state.failSave = (key, value) => {
+      if (key.startsWith("triage:decision:") && value.includes('"fixNote":true') && fail) {
+        fail = false;
+        throw new Error("Temporary database failure");
+      }
+    };
+    await expect(apply()).rejects.toThrow("Temporary database failure");
+    await apply();
+    expect(state.posted.filter((body) => body.includes("sakuracord:fix-note 10"))).toHaveLength(1);
+  });
+
+  it("records a high fix the way Mark as fixed does", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes).toEqual([
+      expect.objectContaining({ kind: "commit", sha, state: "merged", base: "nightly" }),
+    ]);
+    expect(
+      state.request.mock.calls.filter(
+        ([method, path, body]) =>
+          method === "POST" &&
+          path === "/issues/51/comments" &&
+          body.body.includes("The assessment verified this is fixed in the code"),
+      ),
+    ).toHaveLength(1);
+    expect(state.enqueue).toHaveBeenCalledWith(env, "ship", "51:v0.1.6", expect.anything());
+  });
+
+  it("never re-applies a retried result after a maintainer corrected it", async () => {
+    fixedOnNightly();
+    rate({ fix: "high" });
+    const request = state.request.getMockImplementation()!;
+    let fail = true;
+    state.request.mockImplementation(async (...args: any[]) => {
+      if (args[0] === "POST" && args[1] === "/issues/51/comments" && fail) {
+        fail = false;
+        throw new Error("GitHub unavailable");
+      }
+      return request(...args);
+    });
+    await expect(apply()).rejects.toThrow("GitHub unavailable");
+    expect(status()).toEqual(["status: in nightly"]);
+    state.current.labels = ["status: confirmed"];
+    state.enqueue.mockClear();
+    const posts = () => state.request.mock.calls.filter(([method]) => method === "POST").length;
+    const before = posts();
+    await apply();
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(posts()).toBe(before);
+    expect(state.enqueue.mock.calls.some((call) => call[1] === "ship")).toBe(false);
+  });
+
+  it("records a pull request that merged while the result waited as the fix", async () => {
+    fixedByPull();
+    Object.assign(state.pull, { state: "closed", merged: true, merge_commit_sha: sha });
+    await apply();
+    expect(state.pull.body).toBe("");
+    expect(status()).toEqual(["status: in nightly"]);
+    expect(state.issue.fixes).toEqual([expect.objectContaining({ kind: "pr", number: 60, sha })]);
+  });
+
+  it("links only pull requests into nightly", async () => {
+    result.triage.resolution = {
+      state: "unresolved",
+      commit: null,
+      releaseTag: null,
+      pullRequest: 60,
+      explanation: "",
+    };
+    rate({ pullRequest: "high" });
+    state.pull.base.ref = "main";
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+    expect(state.issue.fixes).toEqual([]);
+  });
+
+  for (const maintainer of ["confirmed", "in progress"])
+    it(`leaves a status a maintainer sets during the lookups (${maintainer})`, async () => {
+      fixedOnNightly();
+      result.triage.duplicateOf = 52;
+      rate({ fix: "high", duplicate: "high" });
+      state.duringLookup = () => {
+        state.current.labels = [`status: ${maintainer}`, "agent: investigate"];
+      };
+      await apply();
+      expect(state.current.state).toBe("open");
+      expect(status()).toEqual([`status: ${maintainer}`]);
+      expect(state.current.labels).not.toContain("agent: investigate");
+      expect(state.issue.fixes).toEqual([]);
+      expect(state.notes.size).toBe(0);
+
+      // Without the duplicate, the fix lookup is the slow part.
+      state.values.clear();
+      state.current.labels = ["status: new", "agent: investigate"];
+      result.triage.duplicateOf = null;
+      refreshComment();
+      await apply();
+      expect(status()).toEqual([`status: ${maintainer}`]);
+      expect(state.issue.fixes).toEqual([]);
+    });
+
+  it("applies a high fix or pull request despite a tentative duplicate", async () => {
+    fixedOnNightly();
+    result.triage.duplicateOf = 52;
+    result.triage.duplicateConfidence = 0.6;
+    rate({ fix: "high", duplicate: "medium" });
+    await apply();
+    expect(status()).toEqual(["status: in nightly"]);
+
+    state.values.clear();
+    state.issue.fixes = [];
+    state.current.labels = ["status: new", "agent: investigate"];
+    result.triage.resolution = {
+      state: "unresolved",
+      commit: null,
+      releaseTag: null,
+      pullRequest: 60,
+      explanation: "",
+    };
+    rate({ pullRequest: "high", duplicate: "medium" });
+    await apply();
+    expect(state.pull.body).toBe("Fixes #51 (linked by the triage assessment)");
+  });
+
+  it("closes a duplicate rated high through the maintainer path, unless its original is closed as one", async () => {
+    result.triage.duplicateOf = 52;
+    result.triage.duplicateConfidence = 0.95;
+    rate({ duplicate: "high", kind: "high" });
+    result.triage.kind = "feature";
+    refreshComment();
+    state.target.state = "closed";
+    state.target.state_reason = "duplicate";
+    await apply();
+    expect(state.current.state).toBe("open");
+    expect(status()).toEqual(["status: new"]);
+
+    state.values.clear();
+    state.target.state = "open";
+    state.target.state_reason = null;
+    state.current.type = { name: "Bug" };
+    state.current.labels.push("agent: investigate");
+    await apply();
+    expect(state.current).toMatchObject({ state: "closed", state_reason: "duplicate" });
+    expect(state.issue.duplicateOf).toBe(52);
+    expect(state.notes.get("duplicate")?.text).toBe("Set by the assessment.");
+    // A duplicate keeps its kind so its Discord post stays put.
+    expect(state.current.type).toEqual({ name: "Bug" });
+  });
+
+  it("confirms a regression of a fix rated high, with a note", async () => {
+    result.triage.resolution = {
+      state: "possible_regression",
+      commit: sha,
+      releaseTag: "v0.1.6",
+      explanation: "Already in the reported release.",
+    };
+    rate({ fix: "high" });
+    await apply();
+    expect(status()).toEqual(["status: confirmed"]);
+    expect(state.issue.fixes).toEqual([]);
+    expect(state.notes.get("confirmed")?.text).toContain("aaaaaaa, so this broke again");
+  });
+
+  it("keeps a kind a maintainer changed while the agent ran", async () => {
+    result.sourceKind = "bug";
+    result.triage.kind = "bug";
+    rate({ kind: "high" });
+    state.current.type = { name: "Feature" };
+    await apply();
+    expect(state.current.type).toEqual({ name: "Feature" });
+  });
+
+  it("changes the kind only when that finding is rated high", async () => {
+    result.triage.kind = "feature";
+    rate({ kind: "medium" });
+    await apply();
+    expect(state.current.type).toEqual({ name: "Bug" });
+
+    state.values.clear();
+    state.current.labels.push("agent: investigate");
+    rate({ kind: "high" });
+    await apply();
+    expect(state.current.type).toBe("Feature");
+    expect(state.values.get("assessment:reclassified:51")).toBe("feature");
+  });
+
+  it("asks whether an existing feature covers a suggestion", async () => {
+    state.current.type = { name: "Feature" };
+    result.triage.kind = "feature";
+    rate({});
+    result.triage.needsInformation = true;
+    result.triage.questions = ["This already exists under Settings → Chat. Does it cover it?"];
+    refreshComment();
+    await apply();
+    expect(status()).toEqual(["status: new"]);
+
+    state.values.clear();
+    state.current.labels.push("agent: investigate");
+    result.findings.existingFeature = "high";
+    refreshComment();
+    await apply();
+    expect(status()).toEqual(["status: needs info"]);
+    expect(state.notes.get("needs_info")?.text).toBe("Set by the assessment.");
+  });
+
+  it("asks about an existing feature despite a tentative duplicate", async () => {
+    state.current.type = { name: "Feature" };
+    result.triage.kind = "feature";
+    rate({ existingFeature: "high", duplicate: "medium" });
+    Object.assign(result.triage, {
+      duplicateOf: 52,
+      duplicateConfidence: 0.8,
+      needsInformation: true,
+      questions: ["This already exists under Settings → Chat. Does it cover it?"],
+    });
+    refreshComment();
+    await apply();
+    expect(status()).toEqual(["status: needs info"]);
+  });
+
+  it("asks about an existing feature only within the question budget", async () => {
+    state.current.type = { name: "Feature" };
+    result.triage.kind = "feature";
+    rate({ existingFeature: "high" });
+    result.triage.needsInformation = true;
+    result.triage.questions = ["This already exists under Settings → Chat. Does it cover it?"];
+    refreshComment();
+    state.values.set("triage:answer-runs:51", "2");
+    await apply();
+    expect(status()).toEqual(["status: new"]);
   });
 });

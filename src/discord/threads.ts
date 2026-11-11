@@ -7,6 +7,7 @@ import {
   saveThread,
   setThreadCursor,
   subscribers,
+  takeAssessmentNote,
   takePendingNote,
   threadsForIssue,
   voteCount,
@@ -25,6 +26,9 @@ export interface ForumTagMap {
 }
 
 export const TAG_STATE_KEY = "discord:forum-tags";
+
+/** The kind the assessment last moved a report to, until its post is relocated. */
+export const reclassifiedKey = (number: number) => `assessment:reclassified:${number}`;
 
 export function discordClient(env: Env): Discord {
   return new Discord(env.DISCORD_BOT_TOKEN, env.DISCORD_APPLICATION_ID);
@@ -178,11 +182,13 @@ export async function projectIssue(
     primary = matching ?? (await createThread(env, issue, { pingReporter: false }));
     await setState(env.DB, `discord:relocated:${old.threadId}`, "1");
     await saveThread(env.DB, { ...old, role: "merged", stateHash: null });
+    const byAssessment = (await getState(env.DB, reclassifiedKey(issue.number))) === issue.kind;
+    if (byAssessment) await setState(env.DB, reclassifiedKey(issue.number), "");
     await postInThread(
       env,
       primary.threadId,
       {
-        content: `Reclassified as a ${issue.kind === "bug" ? "bug" : "feature suggestion"}. [Previous discussion](${threadUrl(DISCORD.guildId, old.threadId)}) remains available; continue here.`,
+        content: `Reclassified as a ${issue.kind === "bug" ? "bug" : "feature suggestion"}${byAssessment ? " by the assessment" : ""}. [Previous discussion](${threadUrl(DISCORD.guildId, old.threadId)}) remains available; continue here.`,
         allowed_mentions: noMentions,
       },
       { nonceKey: `reclassified:${old.threadId}:${primary.threadId}` },
@@ -272,7 +278,8 @@ async function announceStatus(
   previous: StatusId,
   thread: ThreadRecord,
 ): Promise<void> {
-  const note = await takePendingNote(env.DB, issue.number, issue.status);
+  const assessed = await takeAssessmentNote(env.DB, issue.number, issue.status);
+  const note = (await takePendingNote(env.DB, issue.number, issue.status)) ?? assessed;
   let duplicateThreadId: string | null = null;
   if (issue.status === "duplicate" && issue.duplicateOf) {
     duplicateThreadId = (await primaryThread(env.DB, issue.duplicateOf))?.threadId ?? null;

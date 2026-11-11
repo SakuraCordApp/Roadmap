@@ -69,13 +69,20 @@ changes and later regular-release announcements are posted without pings.
    works when semantic search is unavailable.
    It returns type, area, priority, title, summary, duplicate suggestions,
    missing-information questions, and code findings in one assessment comment.
-   The hub validates the Actions-authored result, applies metadata on GitHub,
-   and mirrors the comment. Duplicate suggestions never auto-close a report.
+   The hub validates the Actions-authored result (only the marker that ends its
+   comment), applies metadata on GitHub, and mirrors the comment. Each status
+   finding has its own rating. The hub checks and applies a high one, to New or
+   Needs Info reports or to move Confirmed and Planned ones forward: a duplicate
+   closes into its original, a fix on nightly is recorded as Mark as fixed
+   records one, an open PR into nightly gets `Fixes #N` so PR tracking follows
+   it, a regression of a known fix moves to Confirmed, and a suggestion for
+   something that already exists gets a question. Each change's Discord notice
+   says the assessment set it. Lower ratings stay suggestions in Manage.
    Misclassified reports move to the correct Discord forum, retaining the old
    discussion with a link to the new post. No separate model call runs inside the Worker.
    The workflow verifies claimed fix commits against the reported release,
    latest published nightly, latest regular release, and current nightly code.
-   High-confidence existing fixes enter release tracking; unreleased fixes stay
+   Verified existing fixes enter release tracking; unreleased fixes stay
    open until a release contains them. A report whose build already contains the
    claimed fix remains open for regression investigation.
 2. _Fix_ (maintainer-triggered): `agent: fix` or **Manage → Run fix agent**
@@ -100,6 +107,33 @@ continues when Queue delivery is paused. Triage adds its final assessment to the
 same card, and successful fix runs link their draft PR. Failed, cancelled, and timed-out runs retain their
 final status. Agent comments are updated in place when rerun; replayed result
 deliveries are idempotent. GitHub publishing credentials stay outside the read-only agent step.
+A retried result finishes only what its first attempt didn't, and changes
+nothing a maintainer has corrected since.
+
+**Known limits of automatic assessment changes.** These need two things to
+happen within seconds of each other; each is rare and fixable by hand.
+
+- A maintainer changes a report's status, type, title, or labels between the
+  hub's final read and its write: the assessment's change can replace theirs.
+  Set it again in Manage.
+- The report body is edited while the result is being applied: the result
+  applies to the earlier text. Run triage & investigation again.
+- The original is closed as a duplicate or declined while the hub checks it as
+  a duplicate target: the report is still merged into it. Reopen the report and
+  close it as a duplicate of the right one.
+- A retry runs after the write succeeded but recording that failed, and a
+  maintainer edited the report in between: the retry can take the edit for a
+  correction and skip the fix note and release checks. Use Mark as fixed.
+- A maintainer removes the `Fixes #N` line just after the hub added it and
+  before it recorded doing so: a retry adds it again. Remove it again.
+- GitHub fails while the hub adds the `Fixes #N` line, and the pull request
+  merges before the retry: the report isn't linked. Use Mark as fixed.
+- Two updates to one report's fixes at the same moment, such as the assessment
+  recording a fix while a pull request merges, can drop one. Mark as fixed
+  restores it.
+- Removing a `Fixes #N` line doesn't unlink a pull request: the report keeps it
+  as a fix and keeps its status. To undo a wrong link, correct the status in
+  Manage and remove the line.
 
 **GitHub updates channel.** Activity from the app, Roadmap, and Website
 repositories becomes one card per change, edited in place rather than
@@ -190,7 +224,9 @@ subscriptions. Third-party checks additionally require **Checks: read** and the
 **Check run** subscription; Greptile summaries require **Issue comment** and
 **Pull request review** subscriptions (with **Issues: read** and **Pull requests:
 read** permissions). The app repository’s agent workflows identify reports in their
-`run-name`; unrelated label-triggered runs are ignored.
+`run-name`; unrelated label-triggered runs are ignored. When an assessment finds
+an open pull request into nightly that fixes a report, the hub adds `Fixes #N` to
+its description, which needs **Pull requests: read and write**.
 
 Editing the report form: change `src/report/schema.ts`, then regenerate the
 GitHub issue forms in the app repository with

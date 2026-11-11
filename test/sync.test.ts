@@ -1,4 +1,13 @@
 import { describe, expect, it } from "vitest";
+import { db } from "./d1";
+import { ensureSchema } from "../src/db/schema";
+import {
+  dropAssessmentNote,
+  getState,
+  setAssessmentNote,
+  setState,
+  takeAssessmentNote,
+} from "../src/db/store";
 import { parseMilestone, renderMilestoneDescription, visibleVersions } from "../src/roadmap";
 import { discordToGithub } from "../src/sync/comments";
 
@@ -69,5 +78,44 @@ describe("discordToGithub", () => {
     expect(text).toContain("@​octocat");
     expect(text).toContain(":sakura:");
     expect(text).not.toContain("<#4>");
+  });
+});
+
+describe("assessment notes", () => {
+  it("attribute only the status change they describe, and only once", async () => {
+    await ensureSchema(db);
+    const note = {
+      status: "in_nightly",
+      text: "Set by the assessment.",
+      author: "Triage",
+    } as const;
+    await setAssessmentNote(db, 51, note);
+    expect(await takeAssessmentNote(db, 51, "in_nightly")).toEqual({
+      text: note.text,
+      author: note.author,
+    });
+    expect(await takeAssessmentNote(db, 51, "in_nightly")).toBeNull();
+    // A different change announced first drops it, so a later one isn't misattributed.
+    await setAssessmentNote(db, 51, note);
+    expect(await takeAssessmentNote(db, 51, "confirmed")).toBeNull();
+    expect(await takeAssessmentNote(db, 51, "in_nightly")).toBeNull();
+  });
+
+  it("are dropped by a sync that announced nothing once their result was applied", async () => {
+    await ensureSchema(db);
+    const note = {
+      status: "in_progress",
+      text: "Set by the assessment.",
+      author: "Triage",
+    } as const;
+    await setAssessmentNote(db, 52, note);
+    // Synced while the result is still being applied: its change may be on its way.
+    await setState(db, "triage:applied:52", "2000-01-01T00:00:00.000Z");
+    await dropAssessmentNote(db, 52);
+    expect(await getState(db, "assessment:status-note:52")).toContain("in_progress");
+    await setState(db, "triage:applied:52", new Date(Date.now() + 1000).toISOString());
+    // A maintainer restored the status before the sync, so nothing was announced.
+    await dropAssessmentNote(db, 52);
+    expect(await takeAssessmentNote(db, 52, "in_progress")).toBeNull();
   });
 });

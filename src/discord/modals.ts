@@ -1,4 +1,5 @@
 import type { ReportRelease } from "../releases";
+import type { FixProposal } from "../sync/triage";
 import type { IssueKind } from "../config";
 import {
   REPORT_KINDS,
@@ -204,7 +205,21 @@ export function parseModal(data: any): ModalSubmission {
   return { values, multi, attachments };
 }
 
-export function fixedModal(number: number, kind: IssueKind | null, releases: ReportRelease[]) {
+export function fixedModal(
+  number: number,
+  kind: IssueKind | null,
+  releases: ReportRelease[],
+  proposal?: FixProposal | null,
+) {
+  const listed = releases.slice(0, 2);
+  // Fill in the assessment's verified fix so confirming it is one click.
+  const preset = !proposal
+    ? null
+    : !proposal.releaseTag
+      ? { release: "unreleased", reference: proposal.commit }
+      : listed.some((r) => r.tag === proposal.releaseTag)
+        ? { release: proposal.releaseTag, reference: "" }
+        : { release: "other", reference: proposal.releaseTag };
   return {
     type: 9,
     data: {
@@ -220,11 +235,9 @@ export function fixedModal(number: number, kind: IssueKind | null, releases: Rep
             required: true,
             options: [
               { label: "In code — not released yet", value: "unreleased" },
-              ...releases
-                .slice(0, 2)
-                .map((r) => ({ label: `${r.version} (${r.channel})`, value: r.tag })),
+              ...listed.map((r) => ({ label: `${r.version} (${r.channel})`, value: r.tag })),
               { label: "Another published release…", value: "other" },
-            ],
+            ].map((option) => ({ ...option, default: option.value === preset?.release })),
           },
         },
         {
@@ -238,6 +251,7 @@ export function fixedModal(number: number, kind: IssueKind | null, releases: Rep
             style: 1,
             required: false,
             max_length: 300,
+            ...(preset?.reference ? { value: preset.reference } : {}),
           },
         },
         {

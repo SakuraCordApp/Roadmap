@@ -29,13 +29,37 @@ import { referencedIssues, statusGithubLabel } from "../lifecycle";
 import { truncate } from "../util/text";
 import { NO_MIRROR } from "./markers";
 
+/**
+ * Answers restart the automated assessment at most this many times, and the
+ * last of those runs asks nothing more. Later answers wait for a maintainer.
+ */
+const ANSWER_REASSESSMENTS = 2;
+const answerRunsKey = (number: number) => `triage:answer-runs:${number}`;
+
+async function answerReassessments(env: Env, number: number): Promise<number> {
+  return Number((await getState(env.DB, answerRunsKey(number))) ?? 0);
+}
+
+export async function questionsAllowed(env: Env, number: number): Promise<boolean> {
+  return (await answerReassessments(env, number)) < ANSWER_REASSESSMENTS;
+}
+
+/** A maintainer's deliberate rerun starts a fresh question allowance. */
+export async function resetAnswerReassessments(env: Env, number: number): Promise<void> {
+  await setState(env.DB, answerRunsKey(number), "0");
+}
+
 export async function returnToTriage(env: Env, number: number): Promise<void> {
   const github = new GitHub(env);
   const issue = await github.request<GhIssue>("GET", github.repo(`/issues/${number}`));
   if (issue.state !== "open") return;
   const labels = labelNames(issue).filter((name) => name !== statusGithubLabel("needs_info"));
   labels.push(statusGithubLabel("new")!);
-  await patchIssue(env.DB, number, { triagedAt: null });
+  const runs = await answerReassessments(env, number);
+  if (runs < ANSWER_REASSESSMENTS) {
+    await setState(env.DB, answerRunsKey(number), String(runs + 1));
+    await patchIssue(env.DB, number, { triagedAt: null });
+  }
   await github.request("PATCH", github.repo(`/issues/${number}`), { labels: [...new Set(labels)] });
   await enqueue(env, "sync-issue", String(number), { number });
 }
@@ -174,7 +198,7 @@ export async function handleRelease(
       issue.kind &&
       (issue.fixes.some((fix) => fix.state === "merged" && fix.sha) || issue.shippedIn) &&
       (!issue.shippedIn || (!prerelease && !issue.shippedStableIn)) &&
-      !["duplicate", "declined", "cant_reproduce"].includes(issue.status),
+      !resolvedOtherwise(issue),
   );
   await enqueueMany(
     env,
@@ -187,13 +211,17 @@ export async function handleRelease(
   await setState(env.DB, "github:releases-refreshed", "0");
 }
 
+// A maintainer may resolve a report another way while its queued release check waits.
+const resolvedOtherwise = (issue: IssueRecord) =>
+  ["duplicate", "declined", "cant_reproduce"].includes(issue.status);
+
 /** Ship one issue if the release tag contains any of its merged fixes. */
 export async function shipIssue(
   env: Env,
   payload: { number: number; tag: string; url: string },
 ): Promise<void> {
   const issue = await getIssue(env.DB, payload.number);
-  if (!issue) return;
+  if (!issue || resolvedOtherwise(issue)) return;
   const github = new GitHub(env);
   if (!(await containsAnyFix(env, github, issue, payload.tag))) return;
   await recordShipment(env, issue, payload, isPrereleaseTag(payload.tag));
@@ -209,10 +237,13 @@ export async function recordShipment(
 ): Promise<void> {
   const github = new GitHub(env);
   const version = releaseDisplayName(payload.tag);
+  // Automatic shipping always reads GitHub: the cache can lag behind a
+  // resolution a maintainer already made there.
   const current =
-    !issue.shippedIn || issue.state === "open"
+    !issue.shippedIn || issue.state === "open" || !confirmation
       ? await github.request<GhIssue>("GET", github.repo(`/issues/${issue.number}`))
       : null;
+  if (!confirmation && current?.state === "closed" && current.state_reason !== "completed") return;
   if (!issue.shippedIn || current?.state === "open") {
     let milestone: number | undefined;
     if (!current!.milestone) {

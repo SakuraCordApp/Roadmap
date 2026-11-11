@@ -1,5 +1,13 @@
 import { actionOptions, openMilestones, performAction, type MaintainerAction } from "../actions";
-import { DISCORD, ISSUE_TYPES, STATUS_BY_ID, statusLabel, type IssueKind } from "../config";
+import {
+  DISCORD,
+  ISSUE_TYPES,
+  REPOSITORY_URL,
+  STATUS_BY_ID,
+  releaseDisplayName,
+  statusLabel,
+  type IssueKind,
+} from "../config";
 import {
   getDraft,
   getIssue,
@@ -24,6 +32,7 @@ import {
 } from "../reports";
 import { cachedReportReleases } from "../releases";
 import { REPORT_KINDS } from "../report/schema";
+import { pendingFixProposal } from "../sync/triage";
 import { discordClient, refreshCard } from "./threads";
 import { COMPONENTS_V2, EPHEMERAL, issueUrl } from "./cards";
 import { detailsModal, fixedModal, parseModal, reportModal } from "./modals";
@@ -258,11 +267,15 @@ async function handleComponent(
       if (!issue) return ephemeral(`#${number} was not found.`);
       const options = actionOptions(issue.status, issue.kind);
       const triage = issue.triage;
+      const proposal = pendingFixProposal(issue);
       const lines = [
         `**#${number} · ${escapeDiscord(truncate(issue.title, 150))}**`,
         `-# ${statusLabel(issue.status, issue.kind)}${issue.priority ? ` · ${issue.priority} priority` : ""}${issue.milestoneTitle ? ` · v${issue.milestoneTitle}` : ""}`,
         triage?.duplicateOf
           ? `-# 🤖 Possible duplicate of #${triage.duplicateOf} (${Math.round(triage.duplicateConfidence * 100)}%): ${escapeDiscord(truncate(triage.duplicateReason, 200))}`
+          : null,
+        proposal
+          ? `-# 🤖 The assessment found a fix in [${proposal.commit.slice(0, 7)}](${REPOSITORY_URL}/commit/${proposal.commit})${proposal.releaseTag ? `, released in ${releaseDisplayName(proposal.releaseTag)}` : ", not released yet"}. **Mark as fixed** is filled in to confirm it.`
           : null,
       ].filter(Boolean);
       return ephemeral(lines.join("\n"), {
@@ -301,7 +314,14 @@ async function handleComponent(
       );
       if (!option) return ephemeral("That action isn't available anymore.");
       if (chosen === "mark_fixed")
-        return json(fixedModal(number, issue.kind, await cachedReportReleases(env)));
+        return json(
+          fixedModal(
+            number,
+            issue.kind,
+            await cachedReportReleases(env),
+            pendingFixProposal(issue),
+          ),
+        );
       if (chosen === "plan") {
         const milestones = await openMilestones(env);
         if (!milestones.length)
