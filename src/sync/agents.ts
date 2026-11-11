@@ -1,5 +1,5 @@
-import { REPOSITORY } from "../config";
-import { primaryThread } from "../db/store";
+import { REPOSITORY, statusLabel } from "../config";
+import { getIssue, getState, primaryThread, type IssueRecord } from "../db/store";
 import { agentCard, type WorkflowJob } from "../discord/agent-card";
 import { DiscordError, withWritableThread } from "../discord/rest";
 import { discordClient } from "../discord/threads";
@@ -46,10 +46,11 @@ export async function trackAgentRun(env: Env, run: AgentRun, result?: string): P
       .bind(result, run.number, run.kind, run.runId, run.attempt)
       .run();
   }
-  await enqueue(env, "agent-status", `${run.number}:${run.kind}`, {
-    number: run.number,
-    kind: run.kind,
-  });
+  await enqueueAgentStatus(env, run.number, run.kind);
+}
+
+export async function enqueueAgentStatus(env: Env, number: number, kind: AgentKind) {
+  await enqueue(env, "agent-status", `${number}:${kind}`, { number, kind });
 }
 
 /** One bounded batch per cron tick; completed runs stop polling. */
@@ -67,6 +68,27 @@ export async function pollAgentRuns(env: Env) {
       })),
     );
   return results.map((row) => ({ number: row.issue_number, kind: row.kind }));
+}
+
+/** What a finished assessment did to the report, so the card doesn't stop at "Completed". */
+function assessmentOutcome(
+  issue: IssueRecord | null,
+  appliedAt: string | null,
+  run: WorkflowRun,
+): string | undefined {
+  // No marker: nothing applied since this was introduced, so claim nothing.
+  if (!issue || !appliedAt) return undefined;
+  if (Date.parse(appliedAt) < Date.parse(run.run_started_at)) return "⏳ Updating the report…";
+  switch (issue.status) {
+    case "needs_info":
+      return "❓ Waiting for answers to the questions below";
+    case "new":
+      return "👀 A maintainer will review it next";
+    case "in_nightly":
+      return `🌙 Marked ${issue.kind === "feature" ? "implemented" : "fixed"} in nightly`;
+    default:
+      return `Status: ${statusLabel(issue.status, issue.kind)}`;
+  }
 }
 
 export async function syncAgentStatus(
@@ -114,7 +136,15 @@ export async function syncAgentStatus(
     .bind(row.issue_number, row.kind)
     .first<RunRow>();
   if (!latest || latest.run_id !== row.run_id || latest.attempt !== row.attempt) return;
-  const card = agentCard(row.kind, run, jobs, latest.result_text, pull);
+  const outcome =
+    row.kind === "investigate" && run.conclusion === "success"
+      ? assessmentOutcome(
+          await getIssue(env.DB, row.issue_number),
+          await getState(env.DB, `triage:applied:${row.issue_number}`),
+          run,
+        )
+      : undefined;
+  const card = agentCard(row.kind, run, jobs, latest.result_text, pull, outcome);
   const hash = await sha256(JSON.stringify(card));
   let messageId = latest.thread_id === thread.threadId ? latest.message_id : null;
   const discord = discordClient(env);

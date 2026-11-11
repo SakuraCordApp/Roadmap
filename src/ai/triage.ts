@@ -5,14 +5,27 @@ import type { GhComment } from "../github/types";
 // The Actions agent publishes a validated result in its own GitHub comment.
 // User-authored markers must never be allowed to change report metadata.
 export const TRIAGE_MARKER = "<!-- sakuracord:triage-result ";
+const rating = z.enum(["low", "medium", "high"]);
 const resultSchema = z.object({
   version: z.literal(1),
   number: z.number().int().positive(),
   sourceTitle: z.string().max(256),
+  // The kind the agent saw; absent in older results.
+  sourceKind: z.enum(["bug", "feature"]).nullable().optional(),
   bodyHash: z.string().regex(/^[a-f0-9]{64}$/),
   candidates: z.array(z.number().int().positive()).max(12),
   model: z.string().min(1).max(100),
-  confidence: z.enum(["low", "medium", "high"]).optional(),
+  confidence: rating.optional(),
+  // Each status-changing finding rated on its own; absent in older results.
+  findings: z
+    .object({
+      fix: rating,
+      pullRequest: rating,
+      duplicate: rating,
+      kind: rating,
+      existingFeature: rating,
+    })
+    .optional(),
   triage: z.object({
     kind: z.enum(["bug", "feature"]),
     area: z.string().refine((id) => AREAS.some((area) => area.id === id)),
@@ -38,6 +51,7 @@ const resultSchema = z.object({
           .regex(/^[a-f0-9]{40}$/)
           .nullable(),
         releaseTag: z.string().max(100).nullable(),
+        pullRequest: z.number().int().positive().nullable().optional(),
         explanation: z.string().max(1000),
       })
       .optional(),
@@ -46,13 +60,14 @@ const resultSchema = z.object({
 
 export function parseTriageResult(comment: Pick<GhComment, "body" | "user">, number: number) {
   if (comment.user?.login !== "github-actions[bot]" || comment.user.type !== "Bot") return null;
-  const start = comment.body.indexOf(TRIAGE_MARKER);
-  if (start < 0) return null;
-  const end = comment.body.indexOf(" -->", start);
-  if (end < 0) return null;
+  // Only the envelope the publisher appends counts: the narrative above it
+  // repeats model text, which could quote a marker.
+  const body = comment.body.trimEnd();
+  const start = body.lastIndexOf(TRIAGE_MARKER);
+  if (start < 0 || !body.endsWith(" -->")) return null;
   try {
     const parsed = resultSchema.parse(
-      JSON.parse(comment.body.slice(start + TRIAGE_MARKER.length, end)),
+      JSON.parse(body.slice(start + TRIAGE_MARKER.length, -" -->".length)),
     );
     if (parsed.number !== number) return null;
     if (

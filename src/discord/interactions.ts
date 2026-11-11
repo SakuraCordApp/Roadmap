@@ -1,5 +1,13 @@
 import { actionOptions, openMilestones, performAction, type MaintainerAction } from "../actions";
-import { DISCORD, ISSUE_TYPES, STATUS_BY_ID, statusLabel, type IssueKind } from "../config";
+import {
+  DISCORD,
+  ISSUE_TYPES,
+  REPOSITORY_URL,
+  STATUS_BY_ID,
+  releaseDisplayName,
+  statusLabel,
+  type IssueKind,
+} from "../config";
 import {
   getDraft,
   getIssue,
@@ -24,6 +32,7 @@ import {
 } from "../reports";
 import { cachedReportReleases } from "../releases";
 import { REPORT_KINDS } from "../report/schema";
+import { pendingFixProposal } from "../sync/triage";
 import { discordClient, refreshCard } from "./threads";
 import { COMPONENTS_V2, EPHEMERAL, issueUrl } from "./cards";
 import { detailsModal, fixedModal, parseModal, reportModal } from "./modals";
@@ -68,6 +77,14 @@ export async function verifyDiscordRequest(request: Request, publicKey: string, 
 
 const ephemeral = (content: string, extra: Record<string, unknown> = {}) =>
   json({ type: 4, data: { content, flags: EPHEMERAL, allowed_mentions: noMentions, ...extra } });
+/** Components V2 messages can't go back to plain content, so their updates stay V2. */
+const notice = (content: string) => ({
+  // Converting a legacy message (such as the Manage menu) requires clearing its content.
+  content: null,
+  flags: EPHEMERAL | COMPONENTS_V2,
+  allowed_mentions: noMentions,
+  components: [{ type: 10, content }],
+});
 const deferEphemeral = () => json({ type: 5, data: { flags: EPHEMERAL } });
 const deferUpdate = () => json({ type: 6 });
 
@@ -111,11 +128,10 @@ export async function handleInteraction(
       task().catch(async (error) => {
         console.error("Interaction task failed", errorMessage(error));
         await discordClient(env)
-          .editInteractionResponse(interaction.token, {
-            content: `⚠️ Something went wrong: ${truncate(errorMessage(error), 300)}`,
-            components: [],
-            flags: EPHEMERAL,
-          })
+          .editInteractionResponse(
+            interaction.token,
+            notice(`⚠️ Something went wrong: ${truncate(errorMessage(error), 300)}`),
+          )
           .catch(() => undefined);
       }),
     );
@@ -258,11 +274,15 @@ async function handleComponent(
       if (!issue) return ephemeral(`#${number} was not found.`);
       const options = actionOptions(issue.status, issue.kind);
       const triage = issue.triage;
+      const proposal = pendingFixProposal(issue);
       const lines = [
         `**#${number} · ${escapeDiscord(truncate(issue.title, 150))}**`,
         `-# ${statusLabel(issue.status, issue.kind)}${issue.priority ? ` · ${issue.priority} priority` : ""}${issue.milestoneTitle ? ` · v${issue.milestoneTitle}` : ""}`,
         triage?.duplicateOf
           ? `-# 🤖 Possible duplicate of #${triage.duplicateOf} (${Math.round(triage.duplicateConfidence * 100)}%): ${escapeDiscord(truncate(triage.duplicateReason, 200))}`
+          : null,
+        proposal
+          ? `-# 🤖 The assessment found a fix in [${proposal.commit.slice(0, 7)}](${REPOSITORY_URL}/commit/${proposal.commit})${proposal.releaseTag ? `, released in ${releaseDisplayName(proposal.releaseTag)}` : ", not released yet"}. **Mark as fixed** is filled in to confirm it.`
           : null,
       ].filter(Boolean);
       return ephemeral(lines.join("\n"), {
@@ -301,7 +321,14 @@ async function handleComponent(
       );
       if (!option) return ephemeral("That action isn't available anymore.");
       if (chosen === "mark_fixed")
-        return json(fixedModal(number, issue.kind, await cachedReportReleases(env)));
+        return json(
+          fixedModal(
+            number,
+            issue.kind,
+            await cachedReportReleases(env),
+            pendingFixProposal(issue),
+          ),
+        );
       if (chosen === "plan") {
         const milestones = await openMilestones(env);
         if (!milestones.length)
@@ -465,8 +492,8 @@ function filedMessage(report: FiledReport, kind: IssueKind, existing = false) {
           {
             type: 10,
             content: existing
-              ? `### 👍 You're following #${report.number}\nWe added your details and you'll be pinged when it changes${report.threadId ? ` in <#${report.threadId}>` : ""}.`
-              : `### ✅ Filed as #${report.number}\nThanks! Your ${noun} is${report.threadId ? ` in <#${report.threadId}>` : " on GitHub"}. You'll be pinged when it's confirmed, fixed, and shipped.`,
+              ? `### 👍 You're following #${report.number}\nWe added your details${report.threadId ? ` in <#${report.threadId}>` : ""}. You'll be pinged when it's completed.`
+              : `### ✅ Filed as #${report.number}\nThanks! Your ${noun} is${report.threadId ? ` in <#${report.threadId}>` : " on GitHub"}. Follow the post for progress; you'll be pinged when it's completed.`,
           },
         ],
       },
@@ -497,18 +524,11 @@ async function handleDraftComponent(
   if (!draft || draft.user.id !== userOf(interaction).id) {
     return json({
       type: 7,
-      data: {
-        content: "This draft has expired. Start again with `/bug` or `/suggest`.",
-        components: [],
-        flags: EPHEMERAL,
-      },
+      data: notice("This draft has expired. Start again with `/bug` or `/suggest`."),
     });
   }
   if (action === "cancel") {
-    return json({
-      type: 7,
-      data: { content: "Cancelled. Nothing was filed.", components: [], flags: EPHEMERAL },
-    });
+    return json({ type: 7, data: notice("Cancelled. Nothing was filed.") });
   }
   if (action === "details") {
     return json(

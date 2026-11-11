@@ -1,12 +1,12 @@
 import { NIGHTLY_BRANCH, REPOSITORY_SLUG, REPOSITORY_URL } from "./config";
-import { getIssue, patchIssue, setPendingNote, type FixRef } from "./db/store";
+import { getIssue, patchIssue, setPendingNote, type FixRef, type IssueRecord } from "./db/store";
 import type { Env } from "./env";
 import { GitHub } from "./github/client";
 import type { GhIssue, GhPull, GhRelease } from "./github/types";
 import { labelNames } from "./github/types";
 import { enqueueMany } from "./jobs/queue";
 import { statusGithubLabel } from "./lifecycle";
-import { reportReleases } from "./releases";
+import { reportReleases, type ReportRelease } from "./releases";
 import { neutralizeUserText } from "./report/body";
 import { recordShipment } from "./sync/activity";
 import { NO_MIRROR } from "./sync/markers";
@@ -87,30 +87,13 @@ export async function markFixed(
   const releases = await reportReleases(env);
   let message: string;
   if (input.release === "unreleased") {
-    const fix = await resolveFix(github, input.reference ?? "");
-    const comparison = await github.request<{ status: string }>(
-      "GET",
-      github.repo(`/compare/${fix.sha}...${NIGHTLY_BRANCH}`),
-    );
-    if (!["ahead", "identical"].includes(comparison.status))
+    const fix = await nightlyFix(github, input.reference ?? "");
+    if (!fix)
       throw new Error("That fix has not landed on nightly yet. Use Mark in progress instead.");
     await github.request("POST", github.repo(`/issues/${issue.number}/comments`), {
       body: `${NO_MIRROR}\nA maintainer confirmed this is fixed in the code by ${fix.url}. Published releases will be checked for this fix.${attribution}`,
     });
-    await patchIssue(env.DB, issue.number, {
-      shippedIn: null,
-      shippedStableIn: null,
-      fixes: issue.shippedIn
-        ? [fix]
-        : [
-            ...issue.fixes.filter(
-              (existing) =>
-                existing.sha !== fix.sha &&
-                !(fix.kind === "pr" && existing.kind === "pr" && existing.number === fix.number),
-            ),
-            fix,
-          ],
-    });
+    await recordNightlyFix(env, issue, fix);
     if (note) await setPendingNote(env.DB, issue.number, "in_nightly", note, actor);
     await github.request("PATCH", github.repo(`/issues/${issue.number}`), {
       labels: [
@@ -140,13 +123,49 @@ export async function markFixed(
     );
     message = `Marked fixed in ${release.tag_name} and closed as shipped.`;
   }
+  await checkReleases(env, issue.number, releases);
+  return message;
+}
+
+/** A SakuraCord commit or merged pull request that has landed on nightly, or null if not yet. */
+export async function nightlyFix(github: GitHub, reference: string): Promise<FixRef | null> {
+  const fix = await resolveFix(github, reference);
+  const comparison = await github.request<{ status: string }>(
+    "GET",
+    github.repo(`/compare/${fix.sha}...${NIGHTLY_BRANCH}`),
+  );
+  return ["ahead", "identical"].includes(comparison.status) ? fix : null;
+}
+
+/**
+ * Record a fix on nightly as Mark as fixed does, replacing a shipment it
+ * supersedes. Moving the report to In Nightly is the caller's.
+ */
+export async function recordNightlyFix(env: Env, issue: IssueRecord, fix: FixRef): Promise<void> {
+  await patchIssue(env.DB, issue.number, {
+    shippedIn: null,
+    shippedStableIn: null,
+    fixes: issue.shippedIn
+      ? [fix]
+      : [
+          ...issue.fixes.filter(
+            (existing) =>
+              existing.sha !== fix.sha &&
+              !(fix.kind === "pr" && existing.kind === "pr" && existing.number === fix.number),
+          ),
+          fix,
+        ],
+  });
+}
+
+/** Check each published release for a report's recorded fixes. */
+export async function checkReleases(env: Env, number: number, releases: ReportRelease[]) {
   await enqueueMany(
     env,
     releases.map((release) => ({
       kind: "ship" as const,
-      key: `${issue.number}:${release.tag}`,
-      payload: { number: issue.number, tag: release.tag, url: release.url },
+      key: `${number}:${release.tag}`,
+      payload: { number, tag: release.tag, url: release.url },
     })),
   );
-  return message;
 }

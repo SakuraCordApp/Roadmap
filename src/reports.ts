@@ -383,9 +383,9 @@ export async function addDetails(
       user.id,
     );
   }
-  if (issue.status === "needs_info" && issue.reporter?.discordId === user.id) {
-    await returnToTriage(env, number);
-  }
+  // Anyone answering through Add details counts: a report filed on GitHub has
+  // no Discord identity to match, and the answer budget bounds the reruns.
+  if (issue.status === "needs_info") await returnToTriage(env, number);
   return describeFiled(env, number, thread?.threadId ?? null);
 }
 

@@ -2,6 +2,7 @@ import { indexIssue } from "../ai/embeddings";
 import { STATUS_BY_ID } from "../config";
 import {
   addEvent,
+  dropAssessmentNote,
   getIssue,
   moveSubscribers,
   patchIssue,
@@ -19,6 +20,7 @@ import { labelNames, type GhIssue } from "../github/types";
 import { enqueue, enqueueMany } from "../jobs/queue";
 import { deriveStatus, issueArea, issueKind, issuePriority, planLabels } from "../lifecycle";
 import { parseMeta } from "../report/body";
+import { enqueueAgentStatus } from "./agents";
 import { nowIso } from "../util/text";
 
 export interface SyncIssuePayload {
@@ -120,6 +122,9 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     );
   } else if (previous.status !== record.status) {
     await addEvent(env.DB, record.number, "status", { from: previous.status, to: record.status });
+    // The assessment card's outcome follows the synced status, which can land
+    // after the card last refreshed. Queue it before Discord work that may fail.
+    await enqueueAgentStatus(env, record.number, "investigate");
   }
 
   if (record.status === "duplicate" && record.duplicateOf && previous?.status !== "duplicate") {
@@ -136,6 +141,7 @@ export async function syncIssue(env: Env, payload: SyncIssuePayload): Promise<vo
     // that failed. GitHub-filed reports get one as soon as they have a type.
     createIfMissing: !createdByHub || age > 10 * 60_000,
   });
+  await dropAssessmentNote(env.DB, record.number);
 
   if (projection.created && record.commentsCount > 0) {
     // A GitHub-filed issue just got its Discord post: bring the conversation over.
